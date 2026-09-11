@@ -1,0 +1,6 @@
+{
+  "name": "Jarvis AI Assistant",
+  "description": "Multimodal AI assistant powered by Gemini Live API, Google Search grounding, Nano Banana Pro image generation, and VTR MCP vehicle trajectory reconstruction.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
