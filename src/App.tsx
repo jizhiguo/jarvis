@@ -6,7 +6,7 @@ import { CreateModule } from "./components/CreateModule";
 import { ReimagineModule } from "./components/ReimagineModule";
 import { VtrModule } from "./components/VtrModule";
 import { SettingsModal } from "./components/SettingsModal";
-import { ActiveTab, ChatMessage, IllustrationItem, ReimagineItem, JarvisVoice, AppLanguage, AppTheme } from "./types";
+import { ActiveTab, ChatMessage, IllustrationItem, ReimagineItem, JarvisVoice, AppLanguage, AppTheme, RealtimeProviderConfig } from "./types";
 import { getT } from "./i18n";
 import { GaplessPcmPlayer, float32ToPcm16Base64 } from "./utils/audio";
 
@@ -43,8 +43,11 @@ export default function App() {
     return localStorage.getItem("jarvis_mcp_url") || "http://128.23.8.200:8790/sse";
   });
   const [mcpApiKey, setMcpApiKey] = useState<string>(() => {
-    return localStorage.getItem("jarvis_mcp_api_key") || "vt********************************************5ab5";
+    const saved = localStorage.getItem("jarvis_mcp_api_key") || "";
+    return saved.includes("*") ? "" : saved;
   });
+  const [realtimeProviderId, setRealtimeProviderId] = useState(() => localStorage.getItem("jarvis_realtime_provider") || "gemini-live");
+  const [chatProviderId, setChatProviderId] = useState(() => localStorage.getItem("jarvis_chat_provider") || "gemini-live");
   const [wakeWordEnabled, setWakeWordEnabled] = useState<boolean>(() => {
     return localStorage.getItem("jarvis_wake_word") !== "false";
   });
@@ -70,6 +73,7 @@ export default function App() {
         headers: {
           "Content-Type": "application/json",
           ...(geminiApiKey ? { "x-gemini-api-key": geminiApiKey } : {}),
+          "x-chat-provider": chatProviderId,
         },
         body: JSON.stringify({
           url,
@@ -80,6 +84,27 @@ export default function App() {
     } catch {
       return false;
     }
+  };
+
+  const handleSaveRealtimeProvider = async (provider: RealtimeProviderConfig): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/realtime/providers/${encodeURIComponent(provider.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(provider),
+      });
+      if (!res.ok) return false;
+      setRealtimeProviderId(provider.id);
+      localStorage.setItem("jarvis_realtime_provider", provider.id);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleSaveChatProviderId = (providerId: string) => {
+    setChatProviderId(providerId);
+    localStorage.setItem("jarvis_chat_provider", providerId);
   };
 
   const handleToggleWakeWord = (enabled: boolean) => {
@@ -141,8 +166,10 @@ export default function App() {
       }
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const queryParam = geminiApiKey ? `?apiKey=${encodeURIComponent(geminiApiKey)}` : "";
-      const wsUrl = `${protocol}//${window.location.host}/live${queryParam}`;
+      const query = new URLSearchParams();
+      query.set("provider", realtimeProviderId);
+      if (geminiApiKey) query.set("apiKey", geminiApiKey);
+      const wsUrl = `${protocol}//${window.location.host}/live?${query.toString()}`;
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
@@ -291,7 +318,7 @@ export default function App() {
       console.error("WebSocket connection setup failed:", e);
       setIsLiveConnected(false);
     }
-  }, [isMuted]);
+  }, [geminiApiKey, isMuted, realtimeProviderId]);
 
   useEffect(() => {
     connectLiveWebSocket();
@@ -409,6 +436,7 @@ export default function App() {
         headers: {
           "Content-Type": "application/json",
           ...(geminiApiKey ? { "x-gemini-api-key": geminiApiKey } : {}),
+          "x-chat-provider": chatProviderId,
         },
         body: JSON.stringify({ text, voice }),
       });
@@ -455,6 +483,7 @@ export default function App() {
             role: m.role,
             content: m.content,
           })),
+          provider: chatProviderId,
         }),
       });
 
@@ -535,7 +564,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 z-10">
+      <main className="flex-1 w-full min-w-0 mx-auto p-3 sm:p-5 lg:p-6 z-10">
         {activeTab === "console" && (
           <LiveConsole
             messages={messages}
@@ -558,7 +587,7 @@ export default function App() {
         )}
 
         {activeTab === "search" && (
-          <SearchModule onSpeakText={speakText} lang={lang} theme={theme} />
+          <SearchModule onSpeakText={speakText} chatProviderId={chatProviderId} lang={lang} theme={theme} />
         )}
 
         {activeTab === "create" && (
@@ -584,7 +613,7 @@ export default function App() {
 
       {/* Footer Status Bar */}
       <footer
-        className={`border-t backdrop-blur-md px-4 py-2 text-center text-[11px] font-mono z-10 flex flex-col sm:flex-row items-center justify-between gap-2 max-w-7xl mx-auto w-full transition-colors ${
+        className={`border-t backdrop-blur-md px-4 py-2 text-center text-[11px] font-mono z-10 flex flex-col sm:flex-row items-center justify-between gap-2 w-full transition-colors ${
           isDark
             ? "border-cyan-950/60 bg-slate-950/80 text-slate-500"
             : "border-slate-200 bg-white/80 text-slate-500 shadow-xs"
@@ -614,6 +643,10 @@ export default function App() {
         mcpUrl={mcpUrl}
         mcpApiKey={mcpApiKey}
         onSaveMcpConfig={handleSaveMcpConfig}
+        realtimeProviderId={realtimeProviderId}
+        onSaveRealtimeProvider={handleSaveRealtimeProvider}
+        chatProviderId={chatProviderId}
+        onSaveChatProviderId={handleSaveChatProviderId}
         wakeWordEnabled={wakeWordEnabled}
         onToggleWakeWord={handleToggleWakeWord}
         onTestWakeWord={(kw) => {

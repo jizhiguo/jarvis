@@ -1,3 +1,5 @@
+import "./proxy-setup.js";   // ← 必须放在第一行，早于所有其它 import
+
 import express from "express";
 import http from "http";
 import path from "path";
@@ -9,10 +11,21 @@ import {
   getMcpConfig,
   updateMcpConfig,
   testMcpConnection,
+  listMcpTools,
+  callMcpTool,
   executeVtrReconstruction,
   executeVtrLaneDiagnostics,
-  VTR_TOOL_DEFINITIONS,
 } from "./server/mcpManager";
+import {
+  getRealtimeProvider,
+  getRealtimeProviders,
+  publicRealtimeProvider,
+  resolveRealtimeApiKey,
+  resolveTextApiKey,
+  resolveProviderHeaders,
+  updateRealtimeProvider,
+  type RealtimeProviderConfig,
+} from "./server/realtimeManager";
 
 dotenv.config();
 
@@ -86,11 +99,38 @@ app.get("/api/mcp/status", async (_req, res) => {
   }
 });
 
-app.get("/api/mcp/tools", (_req, res) => {
-  res.json({
-    serverKey: "vtr-mcp-server",
-    tools: VTR_TOOL_DEFINITIONS,
-  });
+app.post("/api/mcp/status", async (req, res) => {
+  try {
+    const { url, headers, apiKey } = req.body || {};
+    const status = await testMcpConnection({
+      url,
+      headers: headers || (apiKey ? { "X-API-Key": apiKey } : undefined),
+    });
+    res.json(status);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/realtime/providers", (_req, res) => {
+  res.json({ providers: getRealtimeProviders().map(publicRealtimeProvider) });
+});
+
+app.put("/api/realtime/providers/:id", (req, res) => {
+  try {
+    const updated = updateRealtimeProvider(req.params.id, req.body as Partial<RealtimeProviderConfig>);
+    res.json({ success: true, provider: publicRealtimeProvider(updated) });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/mcp/tools", async (_req, res) => {
+  try {
+    res.json({ serverKey: getMcpConfig().key, tools: await listMcpTools() });
+  } catch (err: any) {
+    res.status(502).json({ error: err.message });
+  }
 });
 
 app.post("/api/mcp/call", async (req, res) => {
@@ -100,35 +140,18 @@ app.post("/api/mcp/call", async (req, res) => {
       return res.status(400).json({ error: "toolName is required." });
     }
 
-    if (toolName === "vtr_reconstruct_trajectory") {
-      const result = executeVtrReconstruction(toolArgs || {});
-      return res.json({ success: true, toolName, result });
-    }
-
-    if (toolName === "vtr_diagnose_lane_logs") {
-      const result = executeVtrLaneDiagnostics(toolArgs?.laneId, toolArgs?.timeRange);
-      return res.json({ success: true, toolName, result });
-    }
-
-    if (toolName === "vtr_get_passage_evidence") {
-      const sample = executeVtrReconstruction({
-        plateNumber: toolArgs?.plateNumber || "粤B88888",
-        scenarioPreset: "normal",
-      });
-      return res.json({ success: true, toolName, result: sample.evidence });
-    }
-
-    res.status(404).json({ error: `Tool ${toolName} not found on MCP server vtr-mcp-server.` });
+    const result = await callMcpTool(toolName, toolArgs || {});
+    res.json({ success: true, toolName, result });
   } catch (err: any) {
     console.error("MCP tool call error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(502).json({ error: err.message });
   }
 });
 
 // Chat with Google Search Grounding and VTR MCP Intelligence
 app.post("/api/chat", async (req, res) => {
   try {
-    const { message, history } = req.body;
+    const { message, history, provider: requestedProviderId } = req.body;
     if (!message) {
       return res.status(400).json({ error: "Message is required." });
     }
@@ -152,7 +175,8 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    const ai = getAIClient(req);
+    const providerId = requestedProviderId || req.headers["x-chat-provider"];
+    const chatProvider = getRealtimeProvider(typeof providerId === "string" ? providerId : undefined);
     const systemInstruction = `You are J.A.R.V.I.S., the hyper-intelligent, suave, and devoted AI assistant created by Tony Stark.
 You speak with refined British elegance, polite wit, and sharp intellect. Address the user with dignified respect (such as "Sir", "Madam", or "Chief").
 Keep your spoken style conversational, crisp, and articulate.
@@ -174,18 +198,51 @@ ${vtrResult ? `The VTR MCP engine has just reconstructed this vehicle passage:\n
       parts: [{ text: message }],
     });
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents,
-      config: {
-        systemInstruction,
-        tools: [{ googleSearch: {} }],
-        temperature: 0.7,
-      },
-    });
+    let reply = "At your service, Sir.";
+    let chunks: any[] = [];
+    const textProtocol = chatProvider.textProtocol || (chatProvider.id === "gemini-live" ? "gemini" : undefined);
 
-    const reply = response.text || "At your service, Sir.";
-    const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    if (textProtocol === "openai-compatible") {
+      if (!chatProvider.textEndpoint) {
+        throw new Error(`Text endpoint is not configured for provider '${chatProvider.id}'.`);
+      }
+      const apiKey = resolveTextApiKey(chatProvider);
+      const response = await fetch(chatProvider.textEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...resolveProviderHeaders(chatProvider),
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model: chatProvider.textModel || chatProvider.model,
+          messages: [{ role: "system", content: systemInstruction }, ...contents.map((item) => ({
+            role: item.role,
+            content: item.parts?.map((part: any) => part.text).join("") || "",
+          }))],
+          temperature: 0.7,
+        }),
+      });
+      const data = await response.json() as any;
+      if (!response.ok) throw new Error(data?.error?.message || `Text provider returned HTTP ${response.status}.`);
+      reply = data?.choices?.[0]?.message?.content || "At your service, Sir.";
+    } else if (textProtocol === "gemini") {
+      const ai = getAIClient(req);
+      const response = await ai.models.generateContent({
+        model: chatProvider.textModel || "gemini-3.8-flash",
+        contents,
+        config: {
+          systemInstruction,
+          tools: [{ googleSearch: {} }],
+          temperature: 0.7,
+        },
+      });
+      reply = response.text || "At your service, Sir.";
+      chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    } else {
+      throw new Error(`Text conversation is not configured for provider '${chatProvider.id}'.`);
+    }
+
     const sources = chunks
       .filter((c: any) => c?.web?.uri)
       .map((c: any) => ({
@@ -425,6 +482,113 @@ Preserve the key identifying facial features, expression, and posture of the per
   }
 });
 
+function providerHeaders(provider: RealtimeProviderConfig): Record<string, string> {
+  const headers = { ...resolveProviderHeaders(provider) };
+  const apiKey = resolveRealtimeApiKey(provider);
+  if (provider.protocol === "doubao-seed-binary" && apiKey && !headers["X-Api-Access-Key"]) {
+    headers["X-Api-Access-Key"] = apiKey;
+  }
+  if (
+    apiKey &&
+    !headers.Authorization &&
+    !headers["api-key"] &&
+    !headers["X-API-Key"] &&
+    !headers["X-Api-Access-Key"]
+  ) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+  return headers;
+}
+
+async function bridgeConfiguredRealtimeProvider(
+  clientWs: WebSocket,
+  provider: RealtimeProviderConfig
+): Promise<void> {
+  if (provider.protocol === "doubao-seed-binary") {
+    throw new Error("Doubao Seed realtime uses a binary frame protocol; this provider needs a binary adapter before it can be used.");
+  }
+  if (!provider.endpoint) throw new Error(`Realtime provider '${provider.id}' has no endpoint configured.`);
+  const upstream = new WebSocket(provider.endpoint, { headers: providerHeaders(provider) });
+  let opened = false;
+
+  const sendUpstream = (payload: any) => {
+    if (upstream.readyState === WebSocket.OPEN) upstream.send(JSON.stringify(payload));
+  };
+
+  upstream.on("open", () => {
+    opened = true;
+    if (provider.protocol === "openai-realtime") {
+      sendUpstream({
+        type: "session.update",
+        session: {
+          modalities: ["text", "audio"],
+          model: provider.model || undefined,
+          voice: provider.voice || undefined,
+          instructions: provider.systemInstruction,
+          input_audio_format: "pcm16",
+          output_audio_format: "pcm16",
+          turn_detection: { type: "server_vad" },
+        },
+      });
+    }
+    clientWs.send(JSON.stringify({ type: "connected", provider: provider.id, message: `${provider.name} realtime connection established.` }));
+  });
+
+  upstream.on("message", (raw: Buffer) => {
+    try {
+      const message = JSON.parse(raw.toString());
+      if (provider.protocol === "openai-realtime") {
+        if (message.type === "response.audio.delta" && message.delta) {
+          clientWs.send(JSON.stringify({ type: "audio", audio: message.delta }));
+        } else if ((message.type === "response.audio_transcript.delta" || message.type === "response.text.delta") && message.delta) {
+          clientWs.send(JSON.stringify({ type: "text", text: message.delta }));
+        } else if (message.type === "response.done") {
+          clientWs.send(JSON.stringify({ type: "turnComplete" }));
+        } else if (message.type === "input_audio_buffer.speech_started") {
+          clientWs.send(JSON.stringify({ type: "interrupted" }));
+        } else if (message.type === "error") {
+          clientWs.send(JSON.stringify({ type: "error", error: message.error?.message || "Realtime provider error" }));
+        }
+      } else {
+        if (message.audio || message.audio_delta) clientWs.send(JSON.stringify({ type: "audio", audio: message.audio || message.audio_delta }));
+        if (message.text || message.text_delta) clientWs.send(JSON.stringify({ type: "text", text: message.text || message.text_delta }));
+        if (message.done || message.type === "turn_complete") clientWs.send(JSON.stringify({ type: "turnComplete" }));
+        if (message.error) clientWs.send(JSON.stringify({ type: "error", error: message.error }));
+      }
+    } catch (error: any) {
+      clientWs.send(JSON.stringify({ type: "error", error: error.message }));
+    }
+  });
+
+  upstream.on("error", (error) => {
+    if (clientWs.readyState === WebSocket.OPEN) clientWs.send(JSON.stringify({ type: "error", error: error.message }));
+  });
+  upstream.on("close", () => {
+    if (clientWs.readyState === WebSocket.OPEN) clientWs.send(JSON.stringify({ type: "sessionClosed" }));
+  });
+
+  clientWs.on("message", (raw: any) => {
+    try {
+      const message = JSON.parse(raw.toString());
+      if (!opened) return;
+      if (provider.protocol === "openai-realtime") {
+        if (message.type === "audio" && message.audio) {
+          sendUpstream({ type: "input_audio_buffer.append", audio: message.audio });
+        } else if (message.type === "text" && message.text) {
+          sendUpstream({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: message.text }] } });
+          sendUpstream({ type: "response.create", response: { modalities: ["text", "audio"] } });
+        }
+      } else if (message.type === "audio" || message.type === "text" || message.type === "video") {
+        sendUpstream(message);
+      }
+    } catch (error: any) {
+      clientWs.send(JSON.stringify({ type: "error", error: error.message }));
+    }
+  });
+
+  clientWs.on("close", () => upstream.close());
+}
+
 async function startServer() {
   const server = http.createServer(app);
 
@@ -436,6 +600,12 @@ async function startServer() {
     let liveSession: any = null;
 
     try {
+      const providerId = new URL(req.url || "/live", "http://localhost").searchParams.get("provider") || "gemini-live";
+      const provider = getRealtimeProvider(providerId);
+      if (provider.protocol !== "gemini-live") {
+        await bridgeConfiguredRealtimeProvider(clientWs, provider);
+        return;
+      }
       const ai = getAIClient(req);
 
       // Tool declarations for Jarvis Live session
@@ -488,47 +658,20 @@ async function startServer() {
         },
       };
 
-      const vtrTrajectoryDeclaration: FunctionDeclaration = {
-        name: "vtrReconstructTrajectory",
-        description: "Reconstruct vehicle trajectory and slice lane logs from VTR MCP Server (LTC/利通虾). Evaluates sensor timings, license plate ANPR, ETC antenna transaction, barrier opening, and calculates trajectory confidence score.",
-        parameters: {
-          type: Type.OBJECT,
-          properties: {
-            plateNumber: {
-              type: Type.STRING,
-              description: "License plate number e.g. 粤B88888, 京A66666",
-            },
-            laneId: {
-              type: Type.STRING,
-              description: "Highway toll lane identifier e.g. G4-E02-ETC",
-            },
-          },
-          required: ["plateNumber"],
-        },
-      };
-
-      const vtrDiagnoseDeclaration: FunctionDeclaration = {
-        name: "vtrDiagnoseLane",
-        description: "Diagnose toll lane hardware and communication logs (coils, laser, camera, ETC RSU, barrier) using VTR MCP Server.",
-        parameters: {
-          type: Type.OBJECT,
-          properties: {
-            laneId: {
-              type: Type.STRING,
-              description: "Lane identifier to scan.",
-            },
-          },
-          required: ["laneId"],
-        },
-      };
+      const remoteMcpTools = await listMcpTools();
+      const remoteMcpDeclarations: FunctionDeclaration[] = remoteMcpTools.map((tool: any) => ({
+        name: tool.name,
+        description: tool.description || `Invoke MCP tool ${tool.name}`,
+        parameters: tool.inputSchema || { type: Type.OBJECT, properties: {} },
+      } as FunctionDeclaration));
 
       liveSession = await ai.live.connect({
-        model: "gemini-3.1-flash-live-preview",
+        model: provider.model || "gemini-3.1-flash-live-preview",
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: "Fenrir" },
+              prebuiltVoiceConfig: { voiceName: provider.voice || "Fenrir" },
             },
           },
           systemInstruction: `You are J.A.R.V.I.S., Tony Stark's legendary British AI assistant.
@@ -538,16 +681,15 @@ You have tools to:
 - search the web ('searchWeb')
 - create illustrations ('createIllustration')
 - trigger camera reimaginations ('reimagineUser')
-- reconstruct vehicle trajectories and diagnose toll lane logs via VTR MCP Server ('vtrReconstructTrajectory', 'vtrDiagnoseLane')
-When the user asks you about vehicle trajectory reconstruction, toll logs, license plates, or lane diagnostics, execute the appropriate VTR tool and give a suave tactical report.`,
+- invoke the dynamically discovered MCP tools supplied by the configured MCP server
+Select an MCP tool based on its description and input schema, then report the returned result clearly.`,
           tools: [
             {
               functionDeclarations: [
                 searchDeclaration,
                 createIllustrationDeclaration,
                 reimagineDeclaration,
-                vtrTrajectoryDeclaration,
-                vtrDiagnoseDeclaration,
+                ...remoteMcpDeclarations,
               ],
             },
           ],
@@ -633,53 +775,21 @@ When the user asks you about vehicle trajectory reconstruction, toll logs, licen
                     name: call.name,
                     response: { status: "Action initiated on HUD display", args: call.args },
                   });
-                } else if (call.name === "vtrReconstructTrajectory") {
+                } else {
                   try {
-                    const vtrData = executeVtrReconstruction(call.args || {});
+                    const mcpResult = await callMcpTool(call.name, call.args || {});
                     clientWs.send(
                       JSON.stringify({
                         type: "toolResult",
-                        tool: "vtrReconstructTrajectory",
-                        result: vtrData,
+                        tool: call.name,
+                        result: mcpResult,
                         id: call.id,
                       })
                     );
                     functionResponses.push({
                       id: call.id,
                       name: call.name,
-                      response: {
-                        summary: vtrData.diagnosticSummary,
-                        confidenceScore: vtrData.confidenceScore,
-                        speedKmh: vtrData.speedKmh,
-                        stepsCount: vtrData.trajectorySteps.length,
-                      },
-                    });
-                  } catch (e: any) {
-                    functionResponses.push({
-                      id: call.id,
-                      name: call.name,
-                      response: { error: e.message },
-                    });
-                  }
-                } else if (call.name === "vtrDiagnoseLane") {
-                  try {
-                    const diagData = executeVtrLaneDiagnostics(call.args?.laneId);
-                    clientWs.send(
-                      JSON.stringify({
-                        type: "toolResult",
-                        tool: "vtrDiagnoseLane",
-                        result: diagData,
-                        id: call.id,
-                      })
-                    );
-                    functionResponses.push({
-                      id: call.id,
-                      name: call.name,
-                      response: {
-                        healthRate: diagData.healthRate,
-                        anomaliesCount: diagData.anomalyPassages,
-                        recommendations: diagData.recommendedActions,
-                      },
+                      response: mcpResult,
                     });
                   } catch (e: any) {
                     functionResponses.push({

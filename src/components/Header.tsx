@@ -113,7 +113,7 @@ export const Header: React.FC<HeaderProps> = ({
           : "border-cyan-200 bg-white/90 shadow-sm"
       }`}
     >
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3">
+      <div className="w-full flex flex-col md:flex-row md:items-center justify-between gap-3">
         {/* Brand & Telemetry */}
         <div className="flex items-center justify-between md:justify-start gap-4">
           <div className="flex items-center gap-3">

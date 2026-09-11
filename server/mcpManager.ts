@@ -1,5 +1,9 @@
-import http from "http";
-import https from "https";
+import "dotenv/config";
+import { Agent, fetch as undiciFetch } from "undici";
+
+const directDispatcher = new Agent({
+  connect: { timeout: 5000 },
+});
 
 export interface McpServerConfig {
   key: string;
@@ -75,7 +79,7 @@ export const MCP_PRESETS = {
     description: "VTR智能体（本地部署模式）：连接本地 127.0.0.1:8790 运行的 FastMCP/SSE 诊断服务。",
     url: "http://127.0.0.1:8790/sse",
     transport: "sse" as const,
-    headers: { "X-API-Key": "vt-local-mcp-dev-key" },
+    headers: { "X-API-Key": "${VTR_MCP_API_KEY}" },
   },
   remote: {
     key: "vtr-mcp-server",
@@ -83,7 +87,7 @@ export const MCP_PRESETS = {
     description: "VTR智能体（远程集群模式）：基于LTC（利通虾）构建的车道日志诊断与轨迹切片还原服务。",
     url: "http://128.23.8.200:8790/sse",
     transport: "sse" as const,
-    headers: { "X-API-Key": "vt********************************************5ab5" },
+    headers: { "X-API-Key": "${VTR_MCP_API_KEY}" },
   },
 };
 
@@ -97,7 +101,7 @@ export let currentMcpConfig: McpServerConfig = {
   transport: "sse",
   url: process.env.VTR_MCP_URL || "http://128.23.8.200:8790/sse",
   headers: {
-    "X-API-Key": process.env.VTR_MCP_API_KEY || "vt********************************************5ab5",
+    "X-API-Key": process.env.VTR_MCP_API_KEY || "",
   },
   command: "",
   args: [],
@@ -124,12 +128,19 @@ export function updateMcpConfig(newConfig: Partial<McpServerConfig> & { preset?:
     };
   }
   
+  const incomingHeaders = { ...(newConfig.headers || {}) };
+  const incomingApiKey = incomingHeaders["X-API-Key"];
+  if (!incomingApiKey || incomingApiKey.includes("*")) {
+    const configuredApiKey = process.env.VTR_MCP_API_KEY;
+    if (configuredApiKey) incomingHeaders["X-API-Key"] = configuredApiKey;
+  }
+
   currentMcpConfig = {
     ...currentMcpConfig,
     ...newConfig,
     headers: {
       ...currentMcpConfig.headers,
-      ...(newConfig.headers || {}),
+      ...incomingHeaders,
     },
   };
   return currentMcpConfig;
@@ -139,73 +150,136 @@ export function getMcpConfig(): McpServerConfig {
   return currentMcpConfig;
 }
 
-// Built-in VTR Tools Specification
-export const VTR_TOOL_DEFINITIONS = [
-  {
-    name: "vtr_reconstruct_trajectory",
-    description:
-      "VTR车辆轨迹重构：以单次通行过程为切片单元，分析车道线圈、激光、抓拍机、ETC天线、道闸日志，精准还原过车轨迹时序，并输出置信度及诊断报告。",
-    parameters: {
-      type: "object",
-      properties: {
-        plateNumber: {
-          type: "string",
-          description: "车牌号码（例如：粤B88888、京A66666）",
-        },
-        laneId: {
-          type: "string",
-          description: "车道编号（例如：G4-K120-E01、ETC-01、出口03）",
-        },
-        scenarioPreset: {
-          type: "string",
-          description: "诊断场景预设：'normal'（标准通行）、'tailgating'（跟车混淆）、'rf_timeout'（天线交易超时）、'coil_bounce'（线圈抖动）",
-        },
-        rawLogs: {
-          type: "string",
-          description: "可选：用户自定义输入的原始车道文本日志片段",
-        },
-      },
-      required: ["plateNumber"],
-    },
-  },
-  {
-    name: "vtr_diagnose_lane_logs",
-    description:
-      "VTR车道日志综合诊断：扫描指定车道或时间段的软硬件通信日志，检测地感线圈抖动、天线盲区、相机会话中断、道闸异常冲卡等故障并输出修复建议。",
-    parameters: {
-      type: "object",
-      properties: {
-        laneId: {
-          type: "string",
-          description: "车道编号",
-        },
-        timeRange: {
-          type: "string",
-          description: "诊断时间范围（例如：最近1小时、2026-09-10 14:00-15:00）",
-        },
-      },
-      required: ["laneId"],
-    },
-  },
-  {
-    name: "vtr_get_passage_evidence",
-    description:
-      "VTR单次通行证据链查询：获取指定车辆通行流水号相关的设备原始日志证据、ETC交易日志、抓拍比对日志，提供可信度证明。",
-    parameters: {
-      type: "object",
-      properties: {
-        passageId: {
-          type: "string",
-          description: "通行切片唯一流水号",
-        },
-      },
-      required: ["passageId"],
-    },
-  },
-];
+type McpJsonRpcResponse = {
+  id?: number;
+  result?: any;
+  error?: { code: number; message: string; data?: any };
+};
+
+function resolveMcpUrl(baseUrl: string, location: string): string {
+  return new URL(location, baseUrl).toString();
+}
+
+function resolveMcpHeaders(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [
+      name,
+      value.replace(/\$\{([A-Z0-9_]+)\}/g, (_match, envName: string) => process.env[envName] || ""),
+    ])
+  );
+}
+
+async function readSseEvent(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  decoder: TextDecoder,
+  buffer: { value: string }
+): Promise<{ event: string; data: string } | null> {
+  while (true) {
+    const boundaryMatch = /\r?\n\r?\n/.exec(buffer.value);
+    if (boundaryMatch && boundaryMatch.index !== undefined) {
+      const raw = buffer.value.slice(0, boundaryMatch.index).replace(/\r/g, "");
+      buffer.value = buffer.value.slice(boundaryMatch.index + boundaryMatch[0].length);
+      const event = raw.match(/^event:\s*(.*)$/m)?.[1] || "message";
+      const data = raw
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      return { event, data };
+    }
+
+    const chunk = await reader.read();
+    if (chunk.done) return null;
+    buffer.value += decoder.decode(chunk.value, { stream: true });
+  }
+}
+
+async function callMcpJsonRpc<T>(method: string, params?: Record<string, any>): Promise<T> {
+  const config = currentMcpConfig;
+  const headers = resolveMcpHeaders(config.headers);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+  try {
+    const sseResponse = await undiciFetch(config.url, {
+      method: "GET",
+      headers: { Accept: "text/event-stream", ...headers },
+      dispatcher: directDispatcher,
+      signal: controller.signal,
+    } as any);
+    if (!sseResponse.ok || !sseResponse.body) {
+      throw new Error(`MCP SSE endpoint responded with HTTP ${sseResponse.status}`);
+    }
+
+    reader = sseResponse.body.getReader();
+    const decoder = new TextDecoder();
+    const buffer = { value: "" };
+    let endpoint: string | undefined;
+    while (!endpoint) {
+      const event = await readSseEvent(reader, decoder, buffer);
+      if (!event) throw new Error("MCP SSE stream closed before providing a message endpoint");
+      if (event.event === "endpoint" || event.data.startsWith("/")) endpoint = event.data;
+    }
+
+    const messageUrl = resolveMcpUrl(config.url, endpoint);
+    let requestId = 0;
+    const sendRequest = async (requestMethod: string, requestParams?: Record<string, any>) => {
+      const id = ++requestId;
+      const response = await undiciFetch(messageUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...headers },
+        body: JSON.stringify({ jsonrpc: "2.0", id, method: requestMethod, params: requestParams || {} }),
+        dispatcher: directDispatcher,
+        signal: controller.signal,
+      } as any);
+      if (!response.ok) throw new Error(`MCP message endpoint responded with HTTP ${response.status}`);
+
+      while (true) {
+        const event = await readSseEvent(reader!, decoder, buffer);
+        if (!event) throw new Error(`MCP SSE stream closed while waiting for ${requestMethod}`);
+        if (!event.data) continue;
+        const message = JSON.parse(event.data) as McpJsonRpcResponse;
+        if (message.id !== id) continue;
+        if (message.error) throw new Error(`MCP ${requestMethod} failed: ${message.error.message}`);
+        return message.result as T;
+      }
+    };
+
+    await sendRequest("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "jarvis", version: "1.0.0" },
+    });
+    await undiciFetch(messageUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }),
+      dispatcher: directDispatcher,
+      signal: controller.signal,
+    } as any);
+    return await sendRequest(method, params);
+  } finally {
+    clearTimeout(timeoutId);
+    controller.abort();
+    await reader?.cancel().catch(() => undefined);
+  }
+}
+
+export async function listMcpTools(): Promise<any[]> {
+  const result = await callMcpJsonRpc<{ tools?: any[] }>("tools/list");
+  return result.tools || [];
+}
+
+export async function callMcpTool(toolName: string, toolArguments: Record<string, any> = {}): Promise<any> {
+  return callMcpJsonRpc("tools/call", { name: toolName, arguments: toolArguments });
+}
 
 // Test connection to the remote MCP SSE server with timeout
-export async function testMcpConnection(): Promise<{
+export async function testMcpConnection(configOverride?: {
+  url?: string;
+  headers?: Record<string, string>;
+}): Promise<{
   connected: boolean;
   statusCode?: number;
   latencyMs: number;
@@ -214,21 +288,25 @@ export async function testMcpConnection(): Promise<{
   endpoint: string;
 }> {
   const startTime = Date.now();
-  const url = currentMcpConfig.url;
+  const url = configOverride?.url || currentMcpConfig.url;
+  const headers = {
+    Accept: "text/event-stream, application/json, text/plain",
+    ...resolveMcpHeaders(configOverride?.headers || currentMcpConfig.headers),
+  };
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3500);
+    timeoutId = setTimeout(() => controller.abort(), 3500);
 
-    const response = await fetch(url, {
+    const response = await undiciFetch(url, {
       method: "GET",
-      headers: {
-        Accept: "text/event-stream, application/json, text/plain",
-        ...currentMcpConfig.headers,
-      },
+      headers,
+      // MCP is commonly deployed on a private LAN and must not use the global proxy.
+      dispatcher: directDispatcher,
       signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+    } as any);
+    await response.body?.cancel();
 
     const latencyMs = Date.now() - startTime;
     return {
@@ -255,6 +333,8 @@ export async function testMcpConnection(): Promise<{
       isFallback: true,
       endpoint: url,
     };
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 

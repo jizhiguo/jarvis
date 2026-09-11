@@ -1,0 +1,75 @@
+[
+  {
+    "id": "gemini-live",
+    "name": "Gemini Live",
+    "description": "Google Gemini Live API",
+    "enabled": false,
+    "protocol": "gemini-live",
+    "endpoint": "",
+    "model": "gemini-3.1-flash-live-preview",
+    "apiKeyEnv": "GEMINI_API_KEY",
+    "headers": {},
+    "voice": "Fenrir",
+    "textProtocol": "gemini",
+    "textModel": "gemini-3.8-flash",
+    "hasApiKey": true,
+    "hasTextApiKey": false
+  },
+  {
+    "id": "openai-realtime",
+    "name": "OpenAI Realtime",
+    "description": "OpenAI Realtime API or compatible gateway",
+    "enabled": false,
+    "protocol": "openai-realtime",
+    "endpoint": "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
+    "model": "gpt-4o-realtime-preview",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "headers": {
+      "OpenAI-Beta": "realtime=v1"
+    },
+    "voice": "alloy"
+  },
+  {
+    "id": "qwen-realtime",
+    "name": "Qwen Realtime",
+    "description": "Qwen3.5-Omni / Qwen-Audio-Realtime compatible endpoint",
+    "enabled": false,
+    "protocol": "openai-realtime",
+    "endpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-omni-flash-realtime",
+    "model": "qwen3.5-omni-flash-realtime",
+    "apiKeyEnv": "DASHSCOPE_API_KEY",
+    "headers": {}
+  },
+  {
+    "id": "doubao-realtime",
+    "name": "Doubao Seed Realtime Voice",
+    "description": "Doubao Seed Realtime Voice compatible endpoint",
+    "enabled": true,
+    "protocol": "doubao-seed-binary",
+    "endpoint": "wss://openspeech.bytedance.com/api/v3/realtime/dialogue",
+    "model": "O2.0",
+    "apiKeyEnv": "VOLCENGINE_API_KEY",
+    "headers": {
+      "X-Api-Resource-Id": "volc.speech.dialog",
+      "X-Api-App-Key": "${VOLCENGINE_APP_KEY}"
+    },
+    "voice": "zh_male_xiaotian_jupiter_bigtts",
+    "textApiKeyEnv": "VOLCENGINE_TEXT_API_KEY",
+    "textProtocol": "openai-compatible",
+    "textEndpoint": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+    "textModel": "doubao-seed-2-1-pro-260628",
+    "hasApiKey": true,
+    "hasTextApiKey": true
+  },
+  {
+    "id": "custom-realtime",
+    "name": "Custom Realtime WebSocket",
+    "description": "Configurable JSON WebSocket realtime provider",
+    "enabled": false,
+    "protocol": "websocket-json",
+    "endpoint": "",
+    "model": "",
+    "apiKeyEnv": "CUSTOM_REALTIME_API_KEY",
+    "headers": {}
+  }
+]

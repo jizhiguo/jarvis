@@ -57,6 +57,9 @@ export const LiveConsole: React.FC<LiveConsoleProps> = ({
 }) => {
   const [inputText, setInputText] = useState("");
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenMode, setFullscreenMode] = useState<"hud" | "conversation">("hud");
+  const lastFullscreenClickRef = useRef<{ button: number; time: number } | null>(null);
+  const hudRootRef = useRef<HTMLDivElement>(null);
   const [wakeWordActive, setWakeWordActive] = useState<boolean>(() => {
     return localStorage.getItem("jarvis_wake_word") !== "false";
   });
@@ -102,19 +105,55 @@ export const LiveConsole: React.FC<LiveConsoleProps> = ({
     localStorage.setItem("jarvis_wake_word", next ? "true" : "false");
   };
 
-  // Fullscreen keyboard listener
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isFullscreen) {
-        setIsFullscreen(false);
-      }
+    const handleFullscreenChange = () => {
+      const active = document.fullscreenElement !== null;
+      setIsFullscreen(active);
+      if (!active) setFullscreenMode("hud");
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isFullscreen]);
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
 
-  const toggleFullscreen = () => {
-    setIsFullscreen(!isFullscreen);
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement === hudRootRef.current) {
+        await document.exitFullscreen();
+      } else {
+        setFullscreenMode("hud");
+        setIsFullscreen(true);
+        await hudRootRef.current?.requestFullscreen();
+      }
+    } catch (error) {
+      console.error("HUD fullscreen request failed:", error);
+      setIsFullscreen(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isFullscreen || fullscreenMode !== "hud") return;
+    const revealConversation = (event: KeyboardEvent | MouseEvent) => {
+      if (event instanceof KeyboardEvent && event.key === "Escape") return;
+      setFullscreenMode("conversation");
+    };
+    window.addEventListener("keydown", revealConversation);
+    window.addEventListener("dblclick", revealConversation);
+    return () => {
+      window.removeEventListener("keydown", revealConversation);
+      window.removeEventListener("dblclick", revealConversation);
+    };
+  }, [isFullscreen, fullscreenMode]);
+
+  const handleFullscreenMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!isFullscreen || fullscreenMode !== "hud" || (event.button !== 0 && event.button !== 2)) return;
+    const now = Date.now();
+    const previous = lastFullscreenClickRef.current;
+    if (previous && previous.button === event.button && now - previous.time < 450) {
+      setFullscreenMode("conversation");
+      lastFullscreenClickRef.current = null;
+      return;
+    }
+    lastFullscreenClickRef.current = { button: event.button, time: now };
   };
 
   useEffect(() => {
@@ -156,15 +195,19 @@ export const LiveConsole: React.FC<LiveConsoleProps> = ({
     },
   ];
 
+  const isHudOnly = isFullscreen && fullscreenMode === "hud";
+
   const content = (
     <div
-      className={`grid grid-cols-1 lg:grid-cols-12 gap-6 ${
-        isFullscreen ? "flex-1 w-full max-w-7xl mx-auto h-[calc(100vh-80px)] overflow-hidden" : "h-full"
+      className={`grid grid-cols-1 gap-4 sm:gap-6 ${
+        isHudOnly ? "h-full" : "lg:grid-cols-12 h-full"
+      } ${
+        isFullscreen && fullscreenMode === "conversation" ? "flex-1 w-full min-h-0 overflow-hidden" : ""
       }`}
     >
       {/* Left Column: Arc Reactor HUD & Holographic Core */}
       <div
-        className={`lg:col-span-5 flex flex-col items-center justify-between p-6 rounded-2xl border backdrop-blur-md shadow-2xl relative overflow-hidden min-h-[420px] transition-colors ${
+        className={`${isHudOnly ? "w-full" : "lg:col-span-5"} flex flex-col items-center justify-between p-6 rounded-2xl border backdrop-blur-md shadow-2xl relative overflow-hidden min-h-[420px] transition-colors ${
           isDark
             ? "bg-gradient-to-b from-slate-900/90 to-slate-950/90 border-cyan-900/30 text-slate-100"
             : "bg-white/95 border-slate-200 text-slate-800 shadow-sm"
@@ -236,7 +279,7 @@ export const LiveConsole: React.FC<LiveConsoleProps> = ({
           <ArcReactor
             status={jarvisStatus}
             audioLevel={audioLevel}
-            size="lg"
+            size={isFullscreen && fullscreenMode === "hud" ? "lg" : "lg"}
             onClick={toggleMic}
           />
         </div>
@@ -346,7 +389,7 @@ export const LiveConsole: React.FC<LiveConsoleProps> = ({
       </div>
 
       {/* Right Column: Interaction Terminal & Subtitle Transcript */}
-      <div
+      {!isHudOnly && <div
         className={`lg:col-span-7 flex flex-col h-full rounded-2xl border backdrop-blur-md shadow-2xl overflow-hidden min-h-[520px] transition-colors ${
           isDark
             ? "bg-slate-900/80 border-cyan-900/30 text-slate-100"
@@ -610,15 +653,25 @@ export const LiveConsole: React.FC<LiveConsoleProps> = ({
             <Send className="w-4 h-4" />
           </button>
         </form>
-      </div>
+      </div>}
     </div>
   );
 
-  if (isFullscreen) {
-    return (
-      <div className="fixed inset-0 z-50 bg-slate-950/98 backdrop-blur-2xl p-4 sm:p-6 flex flex-col overflow-hidden animate-in fade-in duration-200">
-        {/* Fullscreen Banner Header */}
-        <div className="w-full flex items-center justify-between pb-3 border-b border-cyan-900/40 mb-4 max-w-7xl mx-auto">
+  return (
+    <div
+      ref={hudRootRef}
+      onMouseDown={handleFullscreenMouseDown}
+      onContextMenu={(event) => {
+        if (isFullscreen && fullscreenMode === "hud") event.preventDefault();
+      }}
+      className={isFullscreen
+        ? "fixed inset-0 z-50 bg-slate-950/98 backdrop-blur-2xl p-3 sm:p-5 lg:p-6 flex flex-col overflow-hidden animate-in fade-in duration-200"
+        : "w-full min-w-0 h-full"}
+    >
+      {isFullscreen && (
+        <>
+          {/* Fullscreen Banner Header */}
+          <div className="w-full flex items-center justify-between pb-3 border-b border-cyan-900/40 mb-4">
           <div className="flex items-center gap-3">
             <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
             <h1 className="text-sm font-mono tracking-widest font-bold text-cyan-300 uppercase">
@@ -639,11 +692,9 @@ export const LiveConsole: React.FC<LiveConsoleProps> = ({
             </button>
           </div>
         </div>
-
-        {content}
-      </div>
-    );
-  }
-
-  return content;
+        </>
+      )}
+      {content}
+    </div>
+  );
 };

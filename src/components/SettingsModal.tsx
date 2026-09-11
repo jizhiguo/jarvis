@@ -15,7 +15,7 @@ import {
   Globe,
   Radio,
 } from "lucide-react";
-import { AppLanguage, AppTheme } from "../types";
+import { AppLanguage, AppTheme, RealtimeProviderConfig } from "../types";
 import { getT } from "../i18n";
 
 interface SettingsModalProps {
@@ -26,6 +26,10 @@ interface SettingsModalProps {
   mcpUrl: string;
   mcpApiKey: string;
   onSaveMcpConfig: (url: string, apiKey: string) => Promise<boolean>;
+  realtimeProviderId: string;
+  onSaveRealtimeProvider: (provider: RealtimeProviderConfig) => Promise<boolean>;
+  chatProviderId: string;
+  onSaveChatProviderId: (providerId: string) => void;
   wakeWordEnabled: boolean;
   onToggleWakeWord: (enabled: boolean) => void;
   onTestWakeWord: (keyword: "利通虾" | "Jarvis") => void;
@@ -41,13 +45,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   mcpUrl,
   mcpApiKey,
   onSaveMcpConfig,
+  realtimeProviderId,
+  onSaveRealtimeProvider,
+  chatProviderId,
+  onSaveChatProviderId,
   wakeWordEnabled,
   onToggleWakeWord,
   onTestWakeWord,
   lang = "zh",
   theme = "dark",
 }) => {
-  const [activeTab, setActiveTab] = useState<"api" | "mcp" | "wakeword" | "deploy">("api");
+  const [activeTab, setActiveTab] = useState<"api" | "mcp" | "realtime" | "wakeword" | "deploy">("api");
   const [localGeminiKey, setLocalGeminiKey] = useState(geminiApiKey);
   const [showGeminiKey, setShowGeminiKey] = useState(false);
 
@@ -58,9 +66,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [testMessage, setTestMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [saveToast, setSaveToast] = useState(false);
+  const [mcpTools, setMcpTools] = useState<any[]>([]);
+  const [loadingTools, setLoadingTools] = useState(false);
+  const [realtimeProviders, setRealtimeProviders] = useState<RealtimeProviderConfig[]>([]);
+  const [localRealtimeProvider, setLocalRealtimeProvider] = useState<RealtimeProviderConfig | null>(null);
+  const [localChatProviderId, setLocalChatProviderId] = useState(chatProviderId);
 
   const t = getT(lang);
   const isDark = theme === "dark";
+  const inputClass = `mt-2 w-full px-3 py-2.5 rounded-lg border text-sm transition-colors focus:outline-none focus:ring-1 focus:ring-cyan-400 ${
+    isDark
+      ? "bg-slate-950/80 border-cyan-800/40 text-slate-100 placeholder:text-slate-500"
+      : "bg-white border-slate-300 text-slate-800 placeholder:text-slate-400"
+  }`;
+  const selectClass = `w-full px-4 py-2.5 rounded-xl text-sm border transition-colors focus:outline-none focus:ring-1 focus:ring-cyan-400 ${
+    isDark ? "bg-slate-950/80 border-cyan-800/40 text-slate-100" : "bg-white border-slate-300 text-slate-800"
+  }`;
+  const secondaryButtonClass = `px-4 py-2 rounded-xl border text-xs font-mono transition-colors ${
+    isDark
+      ? "border-cyan-700/60 bg-cyan-950/40 text-cyan-300 hover:bg-cyan-900/50"
+      : "border-cyan-300 bg-cyan-50 text-cyan-800 hover:bg-cyan-100"
+  }`;
 
   useEffect(() => {
     setLocalGeminiKey(geminiApiKey);
@@ -68,8 +94,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   useEffect(() => {
     setLocalMcpUrl(mcpUrl);
-    setLocalMcpKey(mcpApiKey);
+    setLocalMcpKey(mcpApiKey.includes("*") ? "" : mcpApiKey);
   }, [mcpUrl, mcpApiKey]);
+
+  useEffect(() => {
+    setLocalChatProviderId(chatProviderId);
+  }, [chatProviderId]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch("/api/realtime/providers")
+      .then((res) => res.json())
+      .then((data) => {
+        const providers = data.providers || [];
+        setRealtimeProviders(providers);
+        setLocalRealtimeProvider(providers.find((item: RealtimeProviderConfig) => item.id === realtimeProviderId) || providers[0] || null);
+      })
+      .catch(() => undefined);
+  }, [isOpen, realtimeProviderId]);
 
   if (!isOpen) return null;
 
@@ -77,9 +119,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setTestStatus("testing");
     setTestMessage(lang === "zh" ? "正在探测 MCP 状态..." : "Testing MCP endpoint...");
     try {
-      const res = await fetch("/api/mcp/status");
+      const res = await fetch("/api/mcp/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: localMcpUrl.trim(),
+          headers: { "X-API-Key": localMcpKey.trim() },
+        }),
+      });
       const data = await res.json();
-      if (data.status === "connected") {
+      if (data.connected === true) {
         setTestStatus("success");
         setTestMessage(lang === "zh" ? "✓ 成功连接至 VTR MCP 服务端" : "✓ Connected to VTR MCP Server");
       } else {
@@ -93,6 +142,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } catch (err: any) {
       setTestStatus("error");
       setTestMessage(lang === "zh" ? `探测失败: ${err.message}` : `Test failed: ${err.message}`);
+    }
+  };
+
+  const loadMcpTools = async () => {
+    setLoadingTools(true);
+    try {
+      const res = await fetch("/api/mcp/tools");
+      const data = await res.json();
+      setMcpTools(data.tools || []);
+    } finally {
+      setLoadingTools(false);
+    }
+  };
+
+  const saveRealtimeProvider = async () => {
+    if (!localRealtimeProvider) return;
+    const saved = await onSaveRealtimeProvider(localRealtimeProvider);
+    if (saved) {
+      onSaveChatProviderId(localChatProviderId);
+      setSaveToast(true);
     }
   };
 
@@ -110,10 +179,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const applyMcpPreset = (type: "localhost" | "remote") => {
     if (type === "localhost") {
       setLocalMcpUrl("http://localhost:8790/sse");
-      setLocalMcpKey("vt-local-mcp-dev-key");
+      setLocalMcpKey("");
     } else {
       setLocalMcpUrl("http://128.23.8.200:8790/sse");
-      setLocalMcpKey("vt********************************************5ab5");
+      setLocalMcpKey("");
     }
   };
 
@@ -157,6 +226,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           >
             <X className="w-4 h-4" />
           </button>
+
         </div>
 
         {/* Tab Selector */}
@@ -187,6 +257,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           >
             <Server className="w-3.5 h-3.5" />
             <span>VTR MCP (X-API-Key)</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("realtime")}
+            className={`py-3 border-b-2 flex items-center gap-1.5 transition-colors ${
+              activeTab === "realtime"
+                ? "border-cyan-400 text-cyan-400 font-bold"
+                : "border-transparent text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Radio className="w-3.5 h-3.5" />
+            <span>{lang === "zh" ? "实时服务提供方" : "Realtime Providers"}</span>
           </button>
 
           <button
@@ -336,7 +418,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     type={showMcpKey ? "text" : "password"}
                     value={localMcpKey}
                     onChange={(e) => setLocalMcpKey(e.target.value)}
-                    placeholder="vt-local-mcp-dev-key"
+                    placeholder="读取自 VTR_MCP_API_KEY，或手动输入"
                     className={`w-full px-4 py-2.5 pr-12 rounded-xl text-sm font-mono border focus:outline-hidden focus:ring-1 focus:ring-cyan-400 transition-colors ${
                       isDark
                         ? "bg-slate-950/80 border-cyan-800/40 text-slate-100 placeholder:text-slate-600"
@@ -379,6 +461,60 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </span>
                 )}
               </div>
+
+              <div className={`p-4 rounded-xl border ${isDark ? "bg-slate-950/40 border-cyan-900/30" : "bg-slate-50 border-slate-200"}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-semibold">{lang === "zh" ? "远端工具能力与签名" : "Remote tools and schemas"}</span>
+                  <button type="button" onClick={loadMcpTools} disabled={loadingTools} className={secondaryButtonClass}>
+                    {loadingTools ? "..." : lang === "zh" ? "刷新工具列表" : "Refresh tools"}
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {mcpTools.map((tool) => (
+                    <div key={tool.name} className="text-xs border-b border-slate-800/60 pb-2">
+                      <div className="font-mono text-cyan-300">{tool.name}</div>
+                      <div className="text-slate-400 mt-1">{tool.description || ""}</div>
+                      <pre className="text-[10px] text-slate-500 mt-1 whitespace-pre-wrap">{JSON.stringify(tool.inputSchema || tool.parameters || {}, null, 2)}</pre>
+                    </div>
+                  ))}
+                  {!mcpTools.length && <span className="text-xs text-slate-500">{lang === "zh" ? "点击刷新以读取远端 MCP 工具" : "Refresh to load remote MCP tools"}</span>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "realtime" && localRealtimeProvider && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-mono uppercase tracking-wider mb-2 font-semibold">{lang === "zh" ? "服务提供方" : "Provider"}</label>
+                <select value={localRealtimeProvider.id} onChange={(e) => setLocalRealtimeProvider(realtimeProviders.find((item) => item.id === e.target.value) || null)} className={selectClass}>
+                  {realtimeProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} ({provider.protocol})</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-mono uppercase tracking-wider mb-2 font-semibold">{lang === "zh" ? "文本对话提供方" : "Text chat provider"}</label>
+                <select value={localChatProviderId} onChange={(e) => setLocalChatProviderId(e.target.value)} className={selectClass}>
+                  {realtimeProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className={`text-xs font-mono ${isDark ? "text-slate-300" : "text-slate-700"}`}>Endpoint<input value={localRealtimeProvider.endpoint} placeholder="wss://..." onChange={(e) => setLocalRealtimeProvider({ ...localRealtimeProvider, endpoint: e.target.value })} className={inputClass} /></label>
+                <label className={`text-xs font-mono ${isDark ? "text-slate-300" : "text-slate-700"}`}>Model<input value={localRealtimeProvider.model} placeholder="model-name" onChange={(e) => setLocalRealtimeProvider({ ...localRealtimeProvider, model: e.target.value })} className={inputClass} /></label>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className={`text-xs font-mono ${isDark ? "text-slate-300" : "text-slate-700"}`}>{lang === "zh" ? "文本协议" : "Text protocol"}<select value={localRealtimeProvider.textProtocol || "gemini"} onChange={(e) => setLocalRealtimeProvider({ ...localRealtimeProvider, textProtocol: e.target.value as "gemini" | "openai-compatible" })} className={inputClass}><option value="gemini">Gemini</option><option value="openai-compatible">OpenAI compatible</option></select></label>
+                <label className={`text-xs font-mono ${isDark ? "text-slate-300" : "text-slate-700"}`}>{lang === "zh" ? "文本模型" : "Text model"}<input value={localRealtimeProvider.textModel || ""} placeholder="model-name" onChange={(e) => setLocalRealtimeProvider({ ...localRealtimeProvider, textModel: e.target.value })} className={inputClass} /></label>
+              </div>
+              <label className={`block text-xs font-mono ${isDark ? "text-slate-300" : "text-slate-700"}`}>{lang === "zh" ? "文本 Endpoint" : "Text endpoint"}<input value={localRealtimeProvider.textEndpoint || ""} placeholder="https://.../chat/completions" onChange={(e) => setLocalRealtimeProvider({ ...localRealtimeProvider, textEndpoint: e.target.value })} className={inputClass} /></label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className={`text-xs font-mono ${isDark ? "text-slate-300" : "text-slate-700"}`}>API key env<input value={localRealtimeProvider.apiKeyEnv || ""} placeholder="PROVIDER_API_KEY" onChange={(e) => setLocalRealtimeProvider({ ...localRealtimeProvider, apiKeyEnv: e.target.value })} className={inputClass} /></label>
+                <label className={`text-xs font-mono ${isDark ? "text-slate-300" : "text-slate-700"}`}>Voice<input value={localRealtimeProvider.voice || ""} placeholder="alloy / Fenrir" onChange={(e) => setLocalRealtimeProvider({ ...localRealtimeProvider, voice: e.target.value })} className={inputClass} /></label>
+              </div>
+              <label className={`block text-xs font-mono ${isDark ? "text-slate-300" : "text-slate-700"}`}>{lang === "zh" ? "语音 API Key" : "Voice API key"}<input type="password" placeholder={localRealtimeProvider.hasApiKey ? "已配置，留空保持不变" : "可选，建议优先使用环境变量"} value={localRealtimeProvider.apiKey === "********" ? "" : localRealtimeProvider.apiKey || ""} onChange={(e) => setLocalRealtimeProvider({ ...localRealtimeProvider, apiKey: e.target.value })} className={inputClass} /></label>
+              <label className={`block text-xs font-mono ${isDark ? "text-slate-300" : "text-slate-700"}`}>{lang === "zh" ? "文本 API Key" : "Text API key"}<input type="password" placeholder={localRealtimeProvider.hasTextApiKey ? "已配置，留空保持不变" : "方舟 API Key"} value={localRealtimeProvider.textApiKey === "********" ? "" : localRealtimeProvider.textApiKey || ""} onChange={(e) => setLocalRealtimeProvider({ ...localRealtimeProvider, textApiKey: e.target.value })} className={inputClass} /></label>
+              <label className={`flex items-center gap-2 text-xs ${isDark ? "text-slate-300" : "text-slate-700"}`}><input type="checkbox" checked={localRealtimeProvider.enabled} onChange={(e) => setLocalRealtimeProvider({ ...localRealtimeProvider, enabled: e.target.checked })} /> {lang === "zh" ? "启用此 provider" : "Enable provider"}</label>
+              <button type="button" onClick={saveRealtimeProvider} className={secondaryButtonClass}>{lang === "zh" ? "保存实时与文本配置" : "Save realtime and text configuration"}</button>
+              <p className={isDark ? "text-xs text-slate-400" : "text-xs text-slate-600"}>{localRealtimeProvider.description}</p>
             </div>
           )}
 

@@ -3,145 +3,106 @@ import { motion } from "motion/react";
 
 interface ArcReactorProps {
   status: "idle" | "listening" | "processing" | "speaking";
-  audioLevel?: number; // 0 to 1
+  audioLevel?: number;
   onClick?: () => void;
   size?: "sm" | "md" | "lg";
 }
 
-export const ArcReactor: React.FC<ArcReactorProps> = ({
-  status,
-  audioLevel = 0,
-  onClick,
-  size = "md",
-}) => {
-  const sizeClasses = {
-    sm: "w-24 h-24",
-    md: "w-44 h-44",
-    lg: "w-64 h-64",
-  }[size];
+const palettes = {
+  idle: { core: "#22d3ee", accent: "#0ea5e9", speed: 24, label: "JARVIS ONLINE" },
+  listening: { core: "#34d399", accent: "#06b6d4", speed: 8, label: "LISTENING" },
+  processing: { core: "#fbbf24", accent: "#f97316", speed: 4, label: "ANALYZING" },
+  speaking: { core: "#67e8f9", accent: "#3b82f6", speed: 6, label: "JARVIS SPEAKING" },
+};
 
-  // Dynamic glow color based on status
-  const glowColor =
-    status === "listening"
-      ? "from-emerald-400 to-cyan-500 shadow-emerald-500/40"
-      : status === "speaking"
-      ? "from-cyan-400 to-blue-500 shadow-cyan-400/50"
-      : status === "processing"
-      ? "from-amber-400 to-orange-500 shadow-amber-500/40"
-      : "from-cyan-500 to-teal-400 shadow-cyan-500/30";
-
-  const statusLabel =
-    status === "listening"
-      ? "LISTENING"
-      : status === "speaking"
-      ? "JARVIS SPEAKING"
-      : status === "processing"
-      ? "ANALYZING"
-      : "JARVIS ONLINE";
-
-  const scalePulse = 1 + audioLevel * 0.35;
+export const ArcReactor: React.FC<ArcReactorProps> = ({ status, audioLevel = 0, onClick, size = "md" }) => {
+  const palette = palettes[status];
+  const sizeClass = { sm: "w-28 h-28", md: "w-52 h-52", lg: "w-[min(70vw,30rem)] h-[min(70vw,30rem)]" }[size];
+  const pulse = 1 + Math.min(audioLevel, 1) * 0.18;
+  const particleCount = size === "lg" ? 18 : 10;
 
   return (
     <div className="flex flex-col items-center justify-center select-none">
-      <div
-        onClick={onClick}
-        className={`relative ${sizeClasses} rounded-full flex items-center justify-center cursor-pointer transition-all duration-300 group`}
-      >
-        {/* Outer ambient glow */}
-        <div
-          className={`absolute inset-0 rounded-full bg-gradient-to-tr ${glowColor} blur-2xl opacity-40 group-hover:opacity-70 transition-opacity`}
-        />
-
-        {/* Outer segmented ring 1 (Clockwise) */}
+      <div onClick={onClick} className={`relative ${sizeClass} cursor-pointer [perspective:900px]`}>
         <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: status === "speaking" ? 6 : 20, repeat: Infinity, ease: "linear" }}
-          className="absolute inset-0 rounded-full border border-cyan-500/30 border-dashed"
+          className="absolute -inset-8 rounded-full blur-3xl opacity-30"
+          style={{ background: `radial-gradient(circle, ${palette.core}, transparent 68%)` }}
+          animate={{ scale: [0.9, 1.12 * pulse, 0.9], opacity: [0.18, 0.46, 0.18] }}
+          transition={{ duration: palette.speed / 3, repeat: Infinity, ease: "easeInOut" }}
         />
-
-        {/* Outer segmented ring 2 (Counter-Clockwise) */}
         <motion.div
-          animate={{ rotate: -360 }}
-          transition={{ duration: status === "speaking" ? 10 : 28, repeat: Infinity, ease: "linear" }}
-          className="absolute inset-2 rounded-full border border-cyan-400/20 border-t-cyan-400/80 border-b-cyan-400/80"
+          className="absolute inset-0 rounded-full border border-cyan-300/30 [transform-style:preserve-3d]"
+          style={{ boxShadow: `0 0 32px ${palette.core}55, inset 0 0 28px ${palette.accent}33` }}
+          animate={{ rotateX: [8, -8, 8], rotateY: [0, 360] }}
+          transition={{ rotateX: { duration: 7, repeat: Infinity, ease: "easeInOut" }, rotateY: { duration: palette.speed, repeat: Infinity, ease: "linear" } }}
+        >
+          <div className="absolute inset-[7%] rounded-full border border-cyan-100/25 [transform:rotateX(62deg)]" />
+          <div className="absolute inset-[7%] rounded-full border border-cyan-100/20 [transform:rotateX(-62deg)]" />
+          <div className="absolute inset-[18%] rounded-full border border-cyan-100/20 [transform:rotateY(64deg)]" />
+          <div className="absolute inset-[18%] rounded-full border border-cyan-100/20 [transform:rotateY(-64deg)]" />
+        </motion.div>
+        {[0, 1, 2].map((orbit) => (
+          <motion.div
+            key={orbit}
+            className="absolute rounded-full border border-cyan-200/35 [transform-style:preserve-3d]"
+            style={{
+              inset: `${10 + orbit * 7}%`,
+              transform: `rotateX(${58 + orbit * 13}deg) rotateY(${orbit * 34 - 18}deg)`,
+              boxShadow: `0 0 12px ${palette.accent}55`,
+            }}
+            animate={{ rotateZ: 360, opacity: [0.25, 0.85, 0.25] }}
+            transition={{ duration: palette.speed / (1.2 + orbit * 0.35), repeat: Infinity, ease: "linear", delay: orbit * 0.25 }}
+          />
+        ))}
+        <motion.div
+          className="absolute left-1/2 top-1/2 w-[72%] h-[2px] -translate-x-1/2 -translate-y-1/2 origin-left bg-gradient-to-r from-transparent via-cyan-100 to-transparent blur-[1px]"
+          style={{ transform: "translate(-50%, -50%) rotate(-24deg)" }}
+          animate={{ scaleX: [0.2, 1, 0.2], opacity: [0, 0.9, 0] }}
+          transition={{ duration: palette.speed / 2, repeat: Infinity, ease: "easeInOut" }}
         />
-
-        {/* Geometric reactor ticks */}
-        <div className="absolute inset-3 rounded-full flex items-center justify-center pointer-events-none">
-          {[...Array(12)].map((_, i) => (
-            <div
-              key={i}
-              className="absolute w-full h-[1px] bg-cyan-500/15"
-              style={{ transform: `rotate(${i * 30}deg)` }}
+        <motion.div
+          className="absolute inset-[12%] rounded-full overflow-hidden border border-cyan-300/40"
+          style={{
+            background: `radial-gradient(circle at 35% 28%, ${palette.core}cc 0 3%, transparent 20%), radial-gradient(circle at 60% 68%, ${palette.accent}99, #020617 62%)`,
+            boxShadow: `inset -18px -18px 35px #020617, inset 12px 12px 25px ${palette.core}66`,
+          }}
+          animate={{ scale: [1, pulse, 1], rotate: [0, 360] }}
+          transition={{ scale: { duration: 0.35 }, rotate: { duration: palette.speed * 1.7, repeat: Infinity, ease: "linear" } }}
+        >
+          <div className="absolute inset-0 opacity-60 bg-[linear-gradient(115deg,transparent_35%,rgba(125,211,252,.5)_48%,transparent_58%)] bg-[length:220%_100%] animate-[shimmer_3s_linear_infinite]" />
+          {Array.from({ length: particleCount }).map((_, index) => (
+            <motion.i
+              key={index}
+              className="absolute w-1 h-1 rounded-full bg-cyan-100 shadow-[0_0_8px_currentColor]"
+              style={{ left: `${12 + ((index * 37) % 76)}%`, top: `${10 + ((index * 61) % 80)}%`, color: palette.core }}
+              animate={{ opacity: [0.1, 1, 0.1], scale: [0.5, 1.8, 0.5], y: [8, -10, 8] }}
+              transition={{ duration: 1.5 + (index % 5) * 0.35, delay: index * 0.08, repeat: Infinity, ease: "easeInOut" }}
             />
           ))}
-        </div>
-
-        {/* Inner high-speed ring */}
+        </motion.div>
         <motion.div
-          animate={{
-            rotate: 360,
-            scale: status === "speaking" || status === "listening" ? [1, scalePulse, 1] : 1,
-          }}
-          transition={{
-            rotate: { duration: status === "processing" ? 3 : 12, repeat: Infinity, ease: "linear" },
-            scale: { duration: 0.2 },
-          }}
-          className="absolute inset-6 rounded-full border-2 border-cyan-400/40 border-r-transparent border-l-transparent"
+          className="absolute inset-[34%] rounded-full border-2 border-white/70"
+          style={{ background: `radial-gradient(circle, ${palette.core}, ${palette.accent} 42%, transparent 72%)`, boxShadow: `0 0 28px ${palette.core}` }}
+          animate={{ scale: [0.84, pulse, 0.84], opacity: [0.65, 1, 0.65] }}
+          transition={{ duration: status === "speaking" ? 0.28 : 1.6, repeat: Infinity, ease: "easeInOut" }}
         />
-
-        {/* Core glow housing */}
-        <div className="absolute inset-9 rounded-full bg-slate-950/80 backdrop-blur-md border border-cyan-500/50 flex items-center justify-center shadow-inner">
-          {/* Glowing central core */}
-          <motion.div
-            animate={{
-              scale: status === "speaking" || status === "listening" ? [1, scalePulse, 1] : [1, 1.08, 1],
-              opacity: [0.8, 1, 0.8],
-            }}
-            transition={{
-              duration: status === "speaking" ? 0.3 : 2,
-              repeat: Infinity,
-              ease: "easeInOut",
-            }}
-            className={`w-12 h-12 rounded-full bg-gradient-to-tr ${glowColor} flex items-center justify-center shadow-lg`}
-          >
-            {/* Triangular arc core center symbol */}
-            <div className="w-5 h-5 rounded-full bg-slate-950/90 border border-cyan-200/80 flex items-center justify-center shadow-inner">
-              <div
-                className={`w-2 h-2 rounded-full ${
-                  status === "listening"
-                    ? "bg-emerald-400"
-                    : status === "processing"
-                    ? "bg-amber-400"
-                    : "bg-cyan-300"
-                } shadow-[0_0_8px_#38bdf8]`}
-              />
-            </div>
-          </motion.div>
-        </div>
-
-        {/* High-tech edge brackets */}
-        <div className="absolute -top-1 px-2 py-0.5 bg-slate-900 border border-cyan-500/40 rounded text-[9px] font-mono tracking-widest text-cyan-400">
-          MK-85
+        <motion.div
+          className="absolute -inset-[6%] rounded-full border border-dashed border-cyan-300/45"
+          animate={{ rotate: -360 }}
+          transition={{ duration: palette.speed * 1.5, repeat: Infinity, ease: "linear" }}
+        />
+        <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded border border-cyan-400/50 bg-slate-950/90 text-[9px] font-mono tracking-widest text-cyan-300">
+          NEURAL CORE
         </div>
       </div>
-
-      {/* Holographic Status Label */}
-      <div className="mt-4 flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900/80 border border-cyan-500/30 backdrop-blur-sm shadow-md">
-        <span
-          className={`w-2 h-2 rounded-full ${
-            status === "listening"
-              ? "bg-emerald-400 animate-ping"
-              : status === "speaking"
-              ? "bg-cyan-400 animate-pulse"
-              : status === "processing"
-              ? "bg-amber-400 animate-spin"
-              : "bg-cyan-500"
-          }`}
+      <div className="mt-6 flex items-center gap-2 px-3 py-1 rounded-full bg-slate-950/80 border border-cyan-400/30 backdrop-blur-sm shadow-[0_0_18px_rgba(34,211,238,.15)]">
+        <motion.span
+          className="w-2 h-2 rounded-full"
+          style={{ backgroundColor: palette.core, boxShadow: `0 0 10px ${palette.core}` }}
+          animate={{ scale: [0.7, 1.4, 0.7] }}
+          transition={{ duration: status === "speaking" ? 0.35 : 1.2, repeat: Infinity }}
         />
-        <span className="text-xs font-mono tracking-wider font-semibold text-cyan-300">
-          {statusLabel}
-        </span>
+        <span className="text-xs font-mono tracking-wider font-semibold" style={{ color: palette.core }}>{palette.label}</span>
       </div>
     </div>
   );

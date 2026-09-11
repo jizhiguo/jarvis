@@ -23,14 +23,20 @@
    - **深色 (Dark) / 浅色 (Light) 模式**：全组件自适应色彩与光影，支持记忆存储。
 
 4. **便捷的多通道 API Key 与 MCP 配置 (Multi-Channel Configuration)**
-   - **Web UI 即时配置**：点击界面右上角齿轮（⚙️）弹出设置面板，可即时修改并测试 **Gemini API Key**、**VTR MCP Server URL**、**MCP X-API-Key** 及唤醒词开关。
+   - **Web UI 即时配置**：点击界面右上角齿轮（⚙️）弹出设置面板，可即时修改并测试 **Gemini API Key**、**MCP Server URL**、**MCP X-API-Key**、实时服务 provider 及唤醒词开关。
+   - MCP 设置页可从远端 `tools/list` 读取每个工具的名称、描述和 `inputSchema`，Live 与 HTTP 调用均使用远端真实签名。
    - **本地环境变量**：支持直接通过 `.env` 文件进行配置，适配容器化与自动化部署。
 
 5. **本地/远程 VTR MCP Server 无缝集成**
    - 遵循 Model Context Protocol (MCP) SSE 规范，深度连接车辆轨迹重构服务器（`vtr-mcp-server`）。
    - 支持预设测试（如粤港澳大湾区高速通行轨迹、跨城物流冷链轨迹等），一键运行诊断。
 
-6. **多模态智能矩阵**
+6. **多 provider 实时语音矩阵**
+   - 配置文件：`config/realtime.providers.json`；设置页可选择和修改 provider。
+   - 内置适配协议：`gemini-live`、`openai-realtime`、`websocket-json`。
+   - 可配置 Gemini Live、OpenAI Realtime、Qwen3.5-Omni/Qwen-Audio-Realtime、Doubao Seed Realtime Voice 或任意兼容网关的 endpoint、model、headers、voice 和 API key 环境变量。
+
+7. **多模态智能矩阵**
    - **Gemini Live 双工语音**：16kHz PCM 输入流与 24kHz 高保真语音流实时低延迟合成。
    - **Google Search Grounding**：实时联网搜索接地，精准回答突发时事与技术问题。
    - **Nano Banana Pro**：高精插画生成与摄像头肖像重构（Reimagine Studio）。

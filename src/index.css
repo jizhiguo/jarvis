@@ -1,1 +1,6 @@
 @import "tailwindcss";
+
+@keyframes shimmer {
+	from { background-position: 220% 0; }
+	to { background-position: -120% 0; }
+}

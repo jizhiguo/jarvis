@@ -38,6 +38,24 @@ interface VtrModuleProps {
   theme?: AppTheme;
 }
 
+const ReadableValue: React.FC<{ value: any; isDark: boolean }> = ({ value, isDark }) => {
+  if (value === null || value === undefined) return <span className="text-slate-500">暂无数据</span>;
+  if (typeof value !== "object") return <span>{String(value)}</span>;
+  if (Array.isArray(value)) {
+    return <div className="space-y-2">{value.map((item, index) => <div key={index} className={`rounded border p-2 ${isDark ? "border-slate-800 bg-slate-950/50" : "border-slate-200 bg-slate-50"}`}><ReadableValue value={item} isDark={isDark} /></div>)}</div>;
+  }
+  return (
+    <div className="space-y-2 text-sm">
+      {Object.entries(value).map(([key, item]) => (
+        <div key={key} className="grid grid-cols-[minmax(7rem,30%)_1fr] gap-3 border-b border-slate-800/50 pb-2 last:border-b-0">
+          <div className="font-mono text-xs text-cyan-500 break-words">{key}</div>
+          <div className={isDark ? "text-slate-300 break-words" : "text-slate-700 break-words"}><ReadableValue value={item} isDark={isDark} /></div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 export const VtrModule: React.FC<VtrModuleProps> = ({
   onSpeak,
   lang = "zh",
@@ -54,6 +72,13 @@ export const VtrModule: React.FC<VtrModuleProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<VtrPassageResult | null>(null);
+  const [availableTools, setAvailableTools] = useState<any[]>([]);
+  const [remoteToolResult, setRemoteToolResult] = useState<any>(null);
+  const [selectedToolName, setSelectedToolName] = useState<string | null>(null);
+  const [toolArgumentsText, setToolArgumentsText] = useState("{}");
+  const [callingTool, setCallingTool] = useState(false);
+  const [llmSummary, setLlmSummary] = useState("");
+  const [summarizing, setSummarizing] = useState(false);
 
   // MCP Server state
   const [mcpConfig, setMcpConfig] = useState<McpServerConfig | null>(null);
@@ -82,8 +107,14 @@ export const VtrModule: React.FC<VtrModuleProps> = ({
   useEffect(() => {
     fetchMcpConfig();
     probeConnection();
-    // Run initial reconstruction for immediate rich display
-    executeReconstruct("粤B88888", "normal");
+    fetch("/api/mcp/tools")
+      .then((res) => res.json())
+      .then((data) => {
+        const tools = Array.isArray(data.tools) ? data.tools : [];
+        setAvailableTools(tools);
+        if (tools.length) executeReconstruct("粤B88888", "normal", tools);
+      })
+      .catch((error) => console.error("Failed to load MCP tools:", error));
   }, []);
 
   const fetchMcpConfig = async () => {
@@ -167,28 +198,115 @@ export const VtrModule: React.FC<VtrModuleProps> = ({
     setTimeout(() => setCopiedCmd(null), 2000);
   };
 
-  const executeReconstruct = async (
-    targetPlate = plateNumber,
-    preset = scenarioPreset
-  ) => {
-    setLoading(true);
+  const unwrapToolResult = (value: any): any => {
+    if (!value || typeof value !== "object") return value;
+    if (value.structuredContent?.result !== undefined) return unwrapToolResult(value.structuredContent.result);
+    if (Array.isArray(value.content)) {
+      const text = value.content.find((item: any) => typeof item?.text === "string")?.text;
+      if (text) {
+        try { return unwrapToolResult(JSON.parse(text)); } catch { return text; }
+      }
+    }
+    if (typeof value.result === "string") {
+      try { return unwrapToolResult(JSON.parse(value.result)); } catch { return value.result; }
+    }
+    return value;
+  };
+
+  const summarizeRemoteResult = async (toolName: string, value: any) => {
+    setSummarizing(true);
     try {
+      const provider = localStorage.getItem("jarvis_chat_provider") || "gemini-live";
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-chat-provider": provider },
+        body: JSON.stringify({
+          provider,
+          message: `请把 MCP 工具 ${toolName} 返回的轨迹/车辆诊断结果整理成简洁、可读的中文报告。请按“结论、关键时间线、证据、异常、建议”分段；不要输出 JSON，不要虚构不存在的数据。\n\n返回结果：\n${JSON.stringify(value)}`,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.reply) setLlmSummary(data.reply);
+    } catch (error) {
+      console.error("Failed to summarize MCP result:", error);
+    } finally {
+      setSummarizing(false);
+    }
+  };
+
+  const callTool = async (tool: any, args?: Record<string, any>) => {
+    setCallingTool(true);
+    setSelectedToolName(tool.name);
+    try {
+      const parsedArgs = args || JSON.parse(toolArgumentsText || "{}");
       const res = await fetch("/api/mcp/call", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          toolName: "vtr_reconstruct_trajectory",
-          arguments: {
+        body: JSON.stringify({ toolName: tool.name, arguments: parsedArgs }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "MCP tool call failed");
+      const unwrapped = unwrapToolResult(data.result);
+      setRemoteToolResult({ toolName: tool.name, result: unwrapped });
+      setResult(null);
+      setLlmSummary("");
+      summarizeRemoteResult(tool.name, unwrapped);
+    } catch (error: any) {
+      setRemoteToolResult({ toolName: tool.name, result: { error: error.message } });
+    } finally {
+      setCallingTool(false);
+    }
+  };
+
+  const executeReconstruct = async (
+    targetPlate = plateNumber,
+    preset = scenarioPreset,
+    tools = availableTools
+  ) => {
+    setLoading(true);
+    setRemoteToolResult(null);
+    try {
+      const requestedTool = tools.find((tool) => tool.name === "vtr_reconstruct_trajectory")
+        || tools.find((tool) => tool.name === "reconstruct_logs");
+      if (!requestedTool) throw new Error("远端 MCP 未提供轨迹重构工具。");
+
+      const toolArguments = requestedTool.name === "reconstruct_logs"
+        ? { max_lines: 2000 }
+        : {
             plateNumber: targetPlate,
             laneId,
             scenarioPreset: preset,
             rawLogs: showCustomLogs ? customLogs : undefined,
-          },
+          };
+      const res = await fetch("/api/mcp/call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          toolName: requestedTool.name,
+          arguments: toolArguments,
         }),
       });
       const data = await res.json();
       if (data.success && data.result) {
-        setResult(data.result);
+        const candidate = unwrapToolResult(data.result);
+        if (Array.isArray(candidate.trajectorySteps) && candidate.evidence) {
+          setResult({
+            ...candidate,
+            trajectorySteps: candidate.trajectorySteps || [],
+            evidence: {
+              ...candidate.evidence,
+              detectedAnomalies: Array.isArray(candidate.evidence.detectedAnomalies)
+                ? candidate.evidence.detectedAnomalies
+                : [],
+            },
+          });
+        } else {
+          console.warn("MCP returned a non-VTR report shape:", candidate);
+          setRemoteToolResult({ toolName: requestedTool.name, result: candidate });
+          setResult(null);
+          setLlmSummary("");
+          summarizeRemoteResult(requestedTool.name, candidate);
+        }
       }
     } catch (e) {
       console.error("VTR Reconstruction error:", e);
@@ -689,19 +807,23 @@ export const VtrModule: React.FC<VtrModuleProps> = ({
               <Network className="w-4 h-4" />
               <span>AVAILABLE MCP TOOLS</span>
             </div>
-            <div className="space-y-1.5 text-[11px]">
-              <div className={`p-1.5 rounded border flex items-center justify-between ${isDark ? "bg-slate-950/80 border-slate-800/80" : "bg-slate-50 border-slate-200"}`}>
-                <span className={isDark ? "text-cyan-300" : "text-cyan-800 font-semibold"}>vtr_reconstruct_trajectory</span>
-                <span className="text-emerald-500 font-bold">active</span>
-              </div>
-              <div className={`p-1.5 rounded border flex items-center justify-between ${isDark ? "bg-slate-950/80 border-slate-800/80" : "bg-slate-50 border-slate-200"}`}>
-                <span className={isDark ? "text-cyan-300" : "text-cyan-800 font-semibold"}>vtr_diagnose_lane_logs</span>
-                <span className="text-emerald-500 font-bold">active</span>
-              </div>
-              <div className={`p-1.5 rounded border flex items-center justify-between ${isDark ? "bg-slate-950/80 border-slate-800/80" : "bg-slate-50 border-slate-200"}`}>
-                <span className={isDark ? "text-cyan-300" : "text-cyan-800 font-semibold"}>vtr_get_passage_evidence</span>
-                <span className="text-emerald-500 font-bold">active</span>
-              </div>
+              <div className="space-y-2 text-[11px] max-h-[32rem] overflow-y-auto">
+              {availableTools.map((tool) => (
+                <div key={tool.name} className={`p-2 rounded border ${isDark ? "bg-slate-950/80 border-slate-800/80" : "bg-slate-50 border-slate-200"}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={isDark ? "text-cyan-300 font-semibold" : "text-cyan-800 font-semibold"}>{tool.name}</span>
+                    <button type="button" disabled={callingTool} onClick={() => { setSelectedToolName(tool.name); setToolArgumentsText(JSON.stringify({}, null, 2)); }} className="px-2 py-1 rounded border border-cyan-700/60 text-cyan-300 hover:bg-cyan-900/50 disabled:opacity-50">参数</button>
+                  </div>
+                  <div className="mt-1 text-slate-500 leading-relaxed">{tool.description || "未提供工具说明"}</div>
+                  {selectedToolName === tool.name && (
+                    <div className="mt-2 space-y-2">
+                      <textarea value={toolArgumentsText} onChange={(e) => setToolArgumentsText(e.target.value)} rows={4} className={`w-full rounded border p-2 text-[10px] font-mono ${isDark ? "bg-black border-slate-700 text-slate-300" : "bg-white border-slate-300 text-slate-700"}`} placeholder={JSON.stringify(tool.inputSchema?.properties || {}, null, 2)} />
+                      <button type="button" disabled={callingTool} onClick={() => callTool(tool)} className="w-full px-2 py-1.5 rounded bg-cyan-700 text-white font-semibold hover:bg-cyan-600 disabled:opacity-50">{callingTool && selectedToolName === tool.name ? "调用中..." : "调用此工具"}</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {!availableTools.length && <div className="text-slate-500">暂无可用 MCP 工具</div>}
             </div>
           </div>
         </div>
@@ -881,7 +1003,7 @@ export const VtrModule: React.FC<VtrModuleProps> = ({
                     isDark ? "border-cyan-900/60" : "border-slate-300"
                   }`}
                 >
-                  {result.trajectorySteps.map((step) => (
+                  {(result.trajectorySteps || []).map((step) => (
                     <div key={step.stepIndex} className="relative group">
                       {/* Step node dot */}
                       <div
@@ -1017,7 +1139,7 @@ export const VtrModule: React.FC<VtrModuleProps> = ({
                         {t.vtrAnomalies}:
                       </div>
                       <div className="space-y-1">
-                        {result.evidence.detectedAnomalies.map((anom, idx) => (
+                        {(result.evidence.detectedAnomalies || []).map((anom, idx) => (
                           <div
                             key={idx}
                             className={`text-xs font-mono rounded px-2 py-1 border ${
@@ -1087,6 +1209,20 @@ export const VtrModule: React.FC<VtrModuleProps> = ({
                 </div>
               </div>
             </>
+          ) : remoteToolResult ? (
+            <div className={`rounded-xl border p-5 ${isDark ? "bg-slate-900/80 border-cyan-800/40" : "bg-white border-slate-200"}`}>
+              <div className="flex items-center gap-2 text-cyan-400 font-mono text-sm font-bold">
+                <CheckCircle2 className="w-4 h-4" />
+                MCP {remoteToolResult.toolName} 返回结果
+              </div>
+              {llmSummary && <div className={`mt-4 rounded-lg border p-4 text-sm leading-7 whitespace-pre-wrap ${isDark ? "bg-cyan-950/20 border-cyan-800/40 text-slate-200" : "bg-cyan-50 border-cyan-200 text-slate-700"}`}>{llmSummary}</div>}
+              {summarizing && <div className="mt-3 text-xs text-cyan-400">正在请文本模型整理结果...</div>}
+              {!llmSummary && !summarizing && <ReadableValue value={remoteToolResult.result} isDark={isDark} />}
+              <details className="mt-4">
+                <summary className="cursor-pointer text-xs text-slate-500">查看原始返回 JSON</summary>
+                <pre className="mt-2 max-h-[24rem] overflow-auto whitespace-pre-wrap text-xs font-mono text-slate-500">{JSON.stringify(remoteToolResult.result, null, 2)}</pre>
+              </details>
+            </div>
           ) : (
             <div
               className={`h-96 flex flex-col items-center justify-center text-center p-8 rounded-xl border ${
@@ -1173,7 +1309,7 @@ export const VtrModule: React.FC<VtrModuleProps> = ({
                   type="text"
                   value={editApiKey}
                   onChange={(e) => setEditApiKey(e.target.value)}
-                  placeholder="vt********************************************5ab5"
+                  placeholder="读取自 VTR_MCP_API_KEY，或手动输入"
                   className={`w-full rounded-lg p-2.5 focus:outline-none focus:border-cyan-400 border transition-colors ${
                     isDark
                       ? "bg-slate-950 border-cyan-800/60 text-slate-300"

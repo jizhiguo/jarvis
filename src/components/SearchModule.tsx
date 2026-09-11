@@ -5,6 +5,7 @@ import { getT } from "../i18n";
 
 interface SearchModuleProps {
   onSpeakText: (text: string) => void;
+  chatProviderId?: string;
   lang?: AppLanguage;
   theme?: AppTheme;
 }
@@ -19,6 +20,7 @@ interface SearchHistoryItem {
 
 export const SearchModule: React.FC<SearchModuleProps> = ({
   onSpeakText,
+  chatProviderId = "gemini-live",
   lang = "zh",
   theme = "dark",
 }) => {
@@ -57,8 +59,9 @@ export const SearchModule: React.FC<SearchModuleProps> = ({
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-chat-provider": chatProviderId },
         body: JSON.stringify({
+          provider: chatProviderId,
           message:
             lang === "zh"
               ? `请在谷歌搜索中检索以下事实并进行条理化中文总结：${searchQuery}`

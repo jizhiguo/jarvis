@@ -70,6 +70,31 @@ export interface McpServerConfig {
   };
 }
 
+export type RealtimeProtocol = "gemini-live" | "openai-realtime" | "websocket-json" | "doubao-seed-binary";
+export type TextProtocol = "gemini" | "openai-compatible";
+
+export interface RealtimeProviderConfig {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  protocol: RealtimeProtocol;
+  endpoint: string;
+  model: string;
+  apiKeyEnv?: string;
+  apiKey?: string;
+  textApiKeyEnv?: string;
+  textApiKey?: string;
+  headers: Record<string, string>;
+  voice?: string;
+  systemInstruction?: string;
+  textProtocol?: TextProtocol;
+  textEndpoint?: string;
+  textModel?: string;
+  hasApiKey?: boolean;
+  hasTextApiKey?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "jarvis";
