@@ -52,8 +52,8 @@
 ### 1. 克隆代码仓库
 
 ```bash
-git clone https://github.com/your-username/jarvis-vtr-mcp.git
-cd jarvis-vtr-mcp
+git clone https://github.com/jizhiguo/jarvis.git
+cd jarvis
 ```
 
 ### 2. 安装项目依赖
