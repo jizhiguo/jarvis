@@ -208,6 +208,19 @@ export default function App() {
             setMessages((prev) =>
               prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m))
             );
+          } else if (data.type === "error") {
+            console.error("[Live API] Received error from server:", data.error);
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: Date.now().toString(),
+                role: "jarvis",
+                content: `⚠️ [提示] ${data.error || "服务通信异常"}`,
+                timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              },
+            ]);
+          } else if (data.type === "connected") {
+            console.log("[Live API] Bridge connected:", data.message);
           } else if (data.type === "interrupted") {
             playerRef.current?.stop();
           } else if (data.type === "toolCall") {

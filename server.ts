@@ -33,6 +33,7 @@ import {
   testProviderHealth,
   type RealtimeProviderConfig,
 } from "./server/realtimeManager";
+import { bridgeDoubaoRealtime } from "./server/adapters/DoubaoRealtimeBridge.js";
 
 dotenv.config();
 
@@ -290,10 +291,13 @@ ${vtrResult ? `The VTR MCP engine has just reconstructed this vehicle passage:\n
         },
         body: JSON.stringify({
           model: chatProvider.textModel || chatProvider.model,
-          messages: [{ role: "system", content: systemInstruction }, ...contents.map((item) => ({
-            role: item.role,
-            content: item.parts?.map((part: any) => part.text).join("") || "",
-          }))],
+          messages: [
+            { role: "system", content: systemInstruction },
+            ...contents.map((item) => ({
+              role: (item.role === "model" || item.role === "jarvis") ? "assistant" : item.role,
+              content: item.parts?.map((part: any) => part.text).join("") || "",
+            })),
+          ],
           temperature: 0.7,
         }),
       });
@@ -578,8 +582,9 @@ async function bridgeConfiguredRealtimeProvider(
   clientWs: WebSocket,
   provider: RealtimeProviderConfig
 ): Promise<void> {
-  if (provider.protocol === "doubao-seed-binary") {
-    throw new Error("Doubao Seed realtime uses a binary frame protocol; this provider needs a binary adapter before it can be used.");
+  if (provider.protocol === "doubao-seed-binary" || provider.id === "doubao-realtime") {
+    await bridgeDoubaoRealtime(clientWs, provider);
+    return;
   }
   if (!provider.endpoint) throw new Error(`Realtime provider '${provider.id}' has no endpoint configured.`);
   const upstream = new WebSocket(provider.endpoint, { headers: providerHeaders(provider) });

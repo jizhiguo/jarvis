@@ -158,7 +158,7 @@ export class DoubaoAdapter extends BaseAdapter {
     }
     for (const msg of options.messages) {
       messages.push({
-        role: msg.role === "model" ? "assistant" : msg.role,
+        role: msg.role === "model" || msg.role === ("jarvis" as any) ? "assistant" : msg.role,
         content: msg.content,
       });
     }
