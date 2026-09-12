@@ -52,16 +52,21 @@ export interface VtrPassageResult {
 
 export interface McpServerConfig {
   key: string;
+  id?: string;
   name: string;
   description: string;
   enabled: boolean;
   transport: "sse" | "stdio" | "http";
   url: string;
   headers: Record<string, string>;
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-  cwd: string;
+  apiKeyEnv?: string;
+  apiKey?: string;
+  hasApiKey?: boolean;
+  timeoutMs?: number;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
   tools?: any[] | null;
   oauth_status?: any | null;
   access_summary?: {
@@ -72,27 +77,71 @@ export interface McpServerConfig {
 
 export type RealtimeProtocol = "gemini-live" | "openai-realtime" | "websocket-json" | "doubao-seed-binary";
 export type TextProtocol = "gemini" | "openai-compatible";
+export type ProviderModality = "realtime" | "text" | "image" | "video";
 
 export interface RealtimeProviderConfig {
   id: string;
   name: string;
   description: string;
   enabled: boolean;
+  isUnifiedMultimodal?: boolean;
+  supportedModalities?: ProviderModality[];
+  
+  // Realtime Audio Modality
   protocol: RealtimeProtocol;
   endpoint: string;
   model: string;
+  voice?: string;
   apiKeyEnv?: string;
   apiKey?: string;
-  textApiKeyEnv?: string;
-  textApiKey?: string;
-  headers: Record<string, string>;
-  voice?: string;
-  systemInstruction?: string;
+  hasApiKey?: boolean;
+
+  // Text Modality
   textProtocol?: TextProtocol;
   textEndpoint?: string;
   textModel?: string;
-  hasApiKey?: boolean;
+  textApiKeyEnv?: string;
+  textApiKey?: string;
   hasTextApiKey?: boolean;
+  temperature?: number;
+
+  // Image Modality
+  imageEndpoint?: string;
+  imageModel?: string;
+  imageApiKeyEnv?: string;
+  imageApiKey?: string;
+  hasImageApiKey?: boolean;
+
+  // Video Modality
+  videoModel?: string;
+
+  // Headers & System Instruction
+  headers: Record<string, string>;
+  systemInstruction?: string;
+
+  // Default Watermark Hints (衬底提示)
+  defaults?: {
+    realtime?: {
+      endpoint?: string;
+      model?: string;
+      voice?: string;
+      protocol?: string;
+    };
+    text?: {
+      endpoint?: string;
+      model?: string;
+      protocol?: string;
+      temperature?: number;
+    };
+    image?: {
+      endpoint?: string;
+      model?: string;
+      aspectRatio?: string;
+    };
+    video?: {
+      model?: string;
+    };
+  };
 }
 
 export interface ChatMessage {

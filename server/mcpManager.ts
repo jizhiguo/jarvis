@@ -1,4 +1,6 @@
 import "dotenv/config";
+import fs from "fs";
+import path from "path";
 import { Agent, fetch as undiciFetch } from "undici";
 
 const directDispatcher = new Agent({
@@ -7,22 +9,201 @@ const directDispatcher = new Agent({
 
 export interface McpServerConfig {
   key: string;
+  id?: string;
   name: string;
   description: string;
   enabled: boolean;
   transport: "sse" | "stdio" | "http";
   url: string;
   headers: Record<string, string>;
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-  cwd: string;
+  apiKeyEnv?: string;
+  apiKey?: string;
+  timeoutMs?: number;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
   tools?: any[] | null;
   oauth_status?: any | null;
   access_summary?: {
     default_effect: string;
     overrides_count: number;
   };
+}
+
+const MCP_CONFIG_PATH = path.join(process.cwd(), "config", "mcp.servers.json");
+
+function loadMcpServersFromFile(): McpServerConfig[] {
+  try {
+    if (fs.existsSync(MCP_CONFIG_PATH)) {
+      const data = JSON.parse(fs.readFileSync(MCP_CONFIG_PATH, "utf-8"));
+      if (Array.isArray(data)) {
+        return data.map((item) => ({
+          key: item.id || item.key || "mcp-server",
+          id: item.id || item.key || "mcp-server",
+          name: item.name || "MCP Server",
+          description: item.description || "",
+          enabled: item.enabled ?? true,
+          transport: item.transport || "sse",
+          url: item.url || "",
+          headers: item.headers || {},
+          apiKeyEnv: item.apiKeyEnv,
+          apiKey: item.apiKey,
+          timeoutMs: item.timeoutMs || 6000,
+          command: item.command || "",
+          args: item.args || [],
+          env: item.env || {},
+          cwd: item.cwd || "",
+          tools: item.tools || null,
+        }));
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to load mcp.servers.json, falling back to default:", err);
+  }
+
+  // Default fallback list
+  return [
+    {
+      key: "vtr-remote",
+      id: "vtr-remote",
+      name: "VTR 车辆轨迹重构服务 (远程集群)",
+      description: "基于 LTC (利通虾) 的车道日志诊断与单次通行全息轨迹还原 FastMCP 服务",
+      enabled: true,
+      transport: "sse",
+      url: process.env.VTR_MCP_URL || "http://128.23.8.200:8790/sse",
+      headers: {
+        "X-API-Key": "${VTR_MCP_API_KEY}",
+      },
+      apiKeyEnv: "VTR_MCP_API_KEY",
+      timeoutMs: 6000,
+    },
+    {
+      key: "vtr-local",
+      id: "vtr-local",
+      name: "VTR 车辆轨迹重构服务 (本地开发)",
+      description: "本地开发或私有化网关 FastMCP/SSE 诊断服务 (127.0.0.1:8790)",
+      enabled: false,
+      transport: "sse",
+      url: "http://127.0.0.1:8790/sse",
+      headers: {
+        "X-API-Key": "${VTR_MCP_API_KEY}",
+      },
+      apiKeyEnv: "VTR_MCP_API_KEY",
+      timeoutMs: 5000,
+    },
+    {
+      key: "custom-mcp",
+      id: "custom-mcp",
+      name: "自定义 MCP 服务 (HTTP / SSE)",
+      description: "自定义扩展 MCP 服务，支持 SSE 长连接或 Streaming HTTP JSON-RPC",
+      enabled: false,
+      transport: "http",
+      url: "http://127.0.0.1:8080/mcp",
+      headers: {},
+      timeoutMs: 5000,
+    },
+  ];
+}
+
+function saveMcpServersToFile(servers: McpServerConfig[]) {
+  try {
+    const dir = path.dirname(MCP_CONFIG_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // Write clean json
+    fs.writeFileSync(MCP_CONFIG_PATH, JSON.stringify(servers, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Failed to save mcp.servers.json:", err);
+  }
+}
+
+export let mcpServers: McpServerConfig[] = loadMcpServersFromFile();
+
+export function getMcpServers(): McpServerConfig[] {
+  return mcpServers;
+}
+
+export function getPublicMcpServers(): any[] {
+  return mcpServers.map((s) => {
+    const headers = { ...(s.headers || {}) };
+    const hasKey = !!(s.apiKey || (s.apiKeyEnv && process.env[s.apiKeyEnv]));
+    if (headers["X-API-Key"]) {
+      headers["X-API-Key"] = hasKey ? "********" : "";
+    }
+    return {
+      ...s,
+      headers,
+      apiKey: s.apiKey ? "********" : undefined,
+      hasApiKey: hasKey,
+    };
+  });
+}
+
+export function updateMcpServer(id: string, updates: Partial<McpServerConfig>): McpServerConfig {
+  const index = mcpServers.findIndex((s) => s.id === id || s.key === id);
+  if (index === -1) {
+    throw new Error(`MCP server with id ${id} not found.`);
+  }
+
+  const existing = mcpServers[index];
+  const incomingHeaders = { ...(updates.headers || {}) };
+
+  // Preserve sensitive keys if unchanged
+  if (incomingHeaders["X-API-Key"] && incomingHeaders["X-API-Key"].includes("*")) {
+    incomingHeaders["X-API-Key"] = existing.headers["X-API-Key"] || (existing.apiKeyEnv ? `\${${existing.apiKeyEnv}}` : "");
+  }
+
+  let finalApiKey = updates.apiKey;
+  if (finalApiKey && finalApiKey.includes("*")) {
+    finalApiKey = existing.apiKey;
+  }
+
+  mcpServers[index] = {
+    ...existing,
+    ...updates,
+    key: existing.key,
+    id: existing.id,
+    apiKey: finalApiKey,
+    headers: {
+      ...existing.headers,
+      ...incomingHeaders,
+    },
+  };
+
+  saveMcpServersToFile(mcpServers);
+  return mcpServers[index];
+}
+
+export function addMcpServer(newServer: Partial<McpServerConfig>): McpServerConfig {
+  const id = newServer.id || newServer.key || `mcp-${Date.now()}`;
+  const server: McpServerConfig = {
+    key: id,
+    id,
+    name: newServer.name || "New MCP Server",
+    description: newServer.description || "",
+    enabled: newServer.enabled ?? true,
+    transport: newServer.transport || "sse",
+    url: newServer.url || "",
+    headers: newServer.headers || {},
+    apiKeyEnv: newServer.apiKeyEnv,
+    apiKey: newServer.apiKey,
+    timeoutMs: newServer.timeoutMs || 6000,
+  };
+  mcpServers.push(server);
+  saveMcpServersToFile(mcpServers);
+  return server;
+}
+
+export function deleteMcpServer(id: string): boolean {
+  const index = mcpServers.findIndex((s) => s.id === id || s.key === id);
+  if (index === -1) return false;
+  mcpServers.splice(index, 1);
+  saveMcpServersToFile(mcpServers);
+  return true;
+}
+
+export function toggleMcpServer(id: string, enabled: boolean): McpServerConfig {
+  return updateMcpServer(id, { enabled });
 }
 
 export interface TrajectoryStep {
@@ -266,13 +447,227 @@ async function callMcpJsonRpc<T>(method: string, params?: Record<string, any>): 
   }
 }
 
+// HTTP transport execution for MCP JSON-RPC
+async function callMcpHttpJsonRpc<T>(
+  server: McpServerConfig,
+  method: string,
+  params?: Record<string, any>
+): Promise<T> {
+  const headers = resolveMcpHeaders(server.headers || {});
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), server.timeoutMs || 8000);
+
+  try {
+    const res = await undiciFetch(server.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...headers,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: Date.now(),
+        method,
+        params: params || {},
+      }),
+      dispatcher: directDispatcher,
+      signal: controller.signal,
+    } as any);
+
+    if (!res.ok) {
+      throw new Error(`MCP HTTP server responded with status ${res.status}`);
+    }
+
+    const data = (await res.json()) as McpJsonRpcResponse;
+    if (data.error) {
+      throw new Error(`MCP ${method} error: ${data.error.message}`);
+    }
+    return data.result as T;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// Universal MCP invocation: handles both SSE and HTTP transports
+export async function callServerJsonRpc<T>(
+  server: McpServerConfig,
+  method: string,
+  params?: Record<string, any>
+): Promise<T> {
+  if (server.transport === "http") {
+    return callMcpHttpJsonRpc<T>(server, method, params);
+  }
+  // SSE transport
+  const orig = currentMcpConfig;
+  currentMcpConfig = server;
+  try {
+    return await callMcpJsonRpc<T>(method, params);
+  } finally {
+    currentMcpConfig = orig;
+  }
+}
+
+// Map from toolName -> serverId
+const toolServerMap = new Map<string, string>();
+
+export async function testSingleMcpServer(server: Partial<McpServerConfig>): Promise<{
+  connected: boolean;
+  statusCode?: number;
+  latencyMs: number;
+  toolCount: number;
+  tools: any[];
+  message: string;
+}> {
+  const start = Date.now();
+  const url = server.url || "";
+  const transport = server.transport || "sse";
+  const headers = resolveMcpHeaders(server.headers || {});
+
+  if (!url) {
+    return {
+      connected: false,
+      latencyMs: 0,
+      toolCount: 0,
+      tools: [],
+      message: "缺少 MCP 服务端点 URL",
+    };
+  }
+
+  const dummyConfig: McpServerConfig = {
+    key: server.id || "test-mcp",
+    id: server.id || "test-mcp",
+    name: server.name || "Test Server",
+    description: "",
+    enabled: true,
+    transport: transport as any,
+    url,
+    headers: server.headers || {},
+    timeoutMs: server.timeoutMs || 4000,
+  };
+
+  try {
+    if (transport === "http") {
+      const result = await callMcpHttpJsonRpc<{ tools?: any[] }>(dummyConfig, "tools/list");
+      const latencyMs = Date.now() - start;
+      const tools = result.tools || [];
+      return {
+        connected: true,
+        statusCode: 200,
+        latencyMs,
+        toolCount: tools.length,
+        tools,
+        message: `✓ 成功连接 HTTP MCP 服务！发现 ${tools.length} 个可用工具 (${latencyMs}ms)`,
+      };
+    } else {
+      // SSE test
+      const testResult = await testMcpConnection({ url, headers: server.headers });
+      if (!testResult.connected) {
+        return {
+          connected: false,
+          statusCode: testResult.statusCode,
+          latencyMs: testResult.latencyMs,
+          toolCount: 0,
+          tools: [],
+          message: testResult.message,
+        };
+      }
+      // Try listing tools via SSE
+      try {
+        const result = await callServerJsonRpc<{ tools?: any[] }>(dummyConfig, "tools/list");
+        const latencyMs = Date.now() - start;
+        const tools = result.tools || [];
+        return {
+          connected: true,
+          statusCode: 200,
+          latencyMs,
+          toolCount: tools.length,
+          tools,
+          message: `✓ 成功连通 SSE MCP 服务！握手延时 ${latencyMs}ms，载入 ${tools.length} 个工具`,
+        };
+      } catch (listErr: any) {
+        const latencyMs = Date.now() - start;
+        return {
+          connected: true,
+          statusCode: 200,
+          latencyMs,
+          toolCount: 0,
+          tools: [],
+          message: `✓ SSE 握手成功 (${latencyMs}ms)，工具列表等待激活`,
+        };
+      }
+    }
+  } catch (err: any) {
+    const latencyMs = Date.now() - start;
+    return {
+      connected: false,
+      latencyMs,
+      toolCount: 0,
+      tools: [],
+      message: `MCP 服务连接失败 (${latencyMs}ms): ${err?.message || err}`,
+    };
+  }
+}
+
+export async function listAllEnabledMcpTools(): Promise<any[]> {
+  const enabledServers = mcpServers.filter((s) => s.enabled);
+  const aggregatedTools: any[] = [];
+
+  for (const server of enabledServers) {
+    try {
+      const result = await callServerJsonRpc<{ tools?: any[] }>(server, "tools/list");
+      const tools = result.tools || [];
+      for (const t of tools) {
+        toolServerMap.set(t.name, server.id || server.key);
+        aggregatedTools.push({
+          ...t,
+          _mcpServerId: server.id || server.key,
+          _mcpServerName: server.name,
+        });
+      }
+    } catch (err) {
+      console.warn(`[MCP] Failed to fetch tools from server ${server.name} (${server.url}):`, err);
+    }
+  }
+
+  return aggregatedTools;
+}
+
 export async function listMcpTools(): Promise<any[]> {
-  const result = await callMcpJsonRpc<{ tools?: any[] }>("tools/list");
-  return result.tools || [];
+  try {
+    const all = await listAllEnabledMcpTools();
+    if (all.length > 0) return all;
+    // Fallback to default currentMcpConfig
+    const result = await callMcpJsonRpc<{ tools?: any[] }>("tools/list");
+    return result.tools || [];
+  } catch {
+    return [];
+  }
 }
 
 export async function callMcpTool(toolName: string, toolArguments: Record<string, any> = {}): Promise<any> {
-  return callMcpJsonRpc("tools/call", { name: toolName, arguments: toolArguments });
+  const serverId = toolServerMap.get(toolName);
+  const server = serverId ? mcpServers.find((s) => (s.id || s.key) === serverId && s.enabled) : null;
+
+  try {
+    if (server) {
+      return await callServerJsonRpc(server, "tools/call", { name: toolName, arguments: toolArguments });
+    }
+    return await callMcpJsonRpc("tools/call", { name: toolName, arguments: toolArguments });
+  } catch (err: any) {
+    console.warn(`[MCP] Remote tool call to ${toolName} failed, assessing fallback:`, err.message);
+    if (toolName === "vtr_reconstruct_passage") {
+      return executeVtrReconstruction({
+        plateNumber: toolArguments.plateNumber,
+        laneId: toolArguments.laneId,
+        scenarioPreset: toolArguments.scenario,
+      });
+    }
+    if (toolName === "vtr_lane_diagnostics") {
+      return executeVtrLaneDiagnostics(toolArguments.laneId, toolArguments.timeRange);
+    }
+    throw err;
+  }
 }
 
 // Test connection to the remote MCP SSE server with timeout

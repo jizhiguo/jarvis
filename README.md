@@ -1,45 +1,47 @@
 # J.A.R.V.I.S. • 智能全息交互中枢与车机轨迹重构系统 (VTR MCP)
 
 > **Just A Rather Very Intelligent System (J.A.R.V.I.S.)**  
-> 融合 **Gemini Live API** 实时双工语音、**Google Search 实时接地**、**Nano Banana Pro** 视觉创作与 **VTR MCP Server (车辆轨迹重构 / LTC 利通虾)** 的下一代车载与战术智能中枢。
+> 仓库地址：**https://github.com/jizhiguo/jarvis.git**  
+> 融合 **Gemini Live API / 多 Provider 矩阵** 实时双工语音、**文本/图像/视频多模态统一中枢**、**Google Search 实时接地**、**Nano Banana Pro** 视觉创作与 **多 MCP Server (车辆轨迹重构 / LTC 利通虾 / 自定义工具服务)** 的下一代车载与战术智能中枢。
 
 ---
 
 ## 🌟 核心特性 (Key Features)
 
-1. **沉浸式 HUD 全屏交互 (Holo-HUD Fullscreen)**
+1. **多模态 Provider 分类归类与折叠配置 (Categorized Provider Configuration)**
+   - **四大多模态分类架构**：按 **实时语音 (Realtime / Audio)**、**文本 (Text / LLM)**、**图像 (Image)**、**视频 (Video)** 划分，支持独立折叠（Collapsible Accordion）。
+   - **原生多模态 vs 独立多端点智能识别**：
+     - **原生统一多模态提供商**（如 Google Gemini）：一套多模态模型原生统一支持语音、文本、图像与视频多通道，自动隐藏冗余拆分选项，并显示统一多模态提示卡片。
+     - **分立端点提供商**（如 字节跳动火山引擎 Doubao、OpenAI / 兼容端点、DashScope 等）：在语音和文本各自分类下独立配置对应的 WebSocket 语音流端点与 HTTP REST/SSE 文本端点。
+   - **默认值衬底提示 (Watermark Defaults)**：各参数展示系统默认预设衬底提示（如官方端点、标准模型名、推荐采样率等），用户未显式修改时自动继承默认值。
+   - **即时连通性测试 (Instant Test)**：配置界面支持一键即时测试连通性，秒级反馈延迟、HTTP/WebSocket 握手状态与错误原因。
+   - **全量敏感数据环境变量化与无损保留**：所有 API Key、Secret 支持 `.env` 文件与服务器环境变量；配置界面留空或保持遮罩时不覆盖原值。
+
+2. **可扩展 Provider 适配层架构 (Provider Adapter Layer)**
+   - 在服务端抽象标准适配层接口 `IProviderAdapter`（位于 `server/adapters/`）。
+   - 统一规范文本生成 (`generateText`)、流式输出 (`streamText`)、图像合成 (`generateImage`)、实时语音会话 (`handleRealtimeSession`) 及连通性测试 (`testConnection`)。
+   - 内置 **GeminiAdapter**、**OpenAICompatibleAdapter**、**DoubaoAdapter** 等，遵循适配层设计可零摩擦扩展接入任何第三方或本地私有化大模型。
+
+3. **动态可扩展 MCP 服务集群 (Multi-MCP Support)**
+   - 支持多 MCP 服务器配置（不仅限于 VTR，可扩展高精地图服务、实时路况、天气及自定义 FastMCP/工具服务）。
+   - **按需启用/禁用**：每个 MCP 服务独立提供 `enabled` 状态开关，仅启用的服务工具动态注册并注入会话推理上下文。
+   - **支持 SSE 与 Streaming HTTP**：兼容 Server-Sent Events (SSE) 长连接与标准 HTTP JSON-RPC 传输。
+   - **配置即时测试**：支持即时探测远端 MCP 服务，获取握手状态并实时列出该服务暴露的所有 Tools、参数 Schema。
+   - **预填默认参数**：预设本地部署 (`localhost:8790`) 与远程生产集群 (`128.23.8.200:8790`) 等推荐参数。
+
+4. **沉浸式 HUD 全屏交互 (Holo-HUD Fullscreen)**
    - 支持一键切换全屏 HUD 视效，支持 `ESC` 快捷键退出。
    - 具备反应堆动态电弧动画（Arc Reactor）、实时声波电平波动（Audio Waveform）及系统遥测诊断信息。
 
-2. **双语音唤醒词支持 (Voice Wake Words: "利通虾" / "Jarvis")**
+5. **双语音唤醒词支持 (Voice Wake Words: "利通虾" / "Jarvis")**
    - 浏览器原生连续语音识别，支持以下唤醒词即时响应：
      - **利通虾**：针对车规与道路轨迹重构场景的高敏唤醒。
      - **Jarvis**：经典智能管家唤醒词。
-   - 唤醒后自动播放 Jarvis 专属确认语音（*“在的，先生。请吩咐” / “Yes, Sir? Standing by.”*），并立即开启麦克风或执行伴随指令。
-   - 提供独立唤醒监听开关及免麦克风的一键模拟测试按钮。
+   - 唤醒后自动播放 Jarvis 专属确认语音，并立即开启麦克风或执行伴随指令。
 
-3. **双语界面与双主题模式 (Bilingual & Dark/Light Theme)**
-   - **中 / 英双语自由切换**：中文（简体）与 English 完整本地化。
-   - **深色 (Dark) / 浅色 (Light) 模式**：全组件自适应色彩与光影，支持记忆存储。
-
-4. **便捷的多通道 API Key 与 MCP 配置 (Multi-Channel Configuration)**
-   - **Web UI 即时配置**：点击界面右上角齿轮（⚙️）弹出设置面板，可即时修改并测试 **Gemini API Key**、**MCP Server URL**、**MCP X-API-Key**、实时服务 provider 及唤醒词开关。
-   - MCP 设置页可从远端 `tools/list` 读取每个工具的名称、描述和 `inputSchema`，Live 与 HTTP 调用均使用远端真实签名。
-   - **本地环境变量**：支持直接通过 `.env` 文件进行配置，适配容器化与自动化部署。
-
-5. **本地/远程 VTR MCP Server 无缝集成**
-   - 遵循 Model Context Protocol (MCP) SSE 规范，深度连接车辆轨迹重构服务器（`vtr-mcp-server`）。
-   - 支持预设测试（如粤港澳大湾区高速通行轨迹、跨城物流冷链轨迹等），一键运行诊断。
-
-6. **多 provider 实时语音矩阵**
-   - 配置文件：`config/realtime.providers.json`；设置页可选择和修改 provider。
-   - 内置适配协议：`gemini-live`、`openai-realtime`、`websocket-json`。
-   - 可配置 Gemini Live、OpenAI Realtime、Qwen3.5-Omni/Qwen-Audio-Realtime、Doubao Seed Realtime Voice 或任意兼容网关的 endpoint、model、headers、voice 和 API key 环境变量。
-
-7. **多模态智能矩阵**
-   - **Gemini Live 双工语音**：16kHz PCM 输入流与 24kHz 高保真语音流实时低延迟合成。
-   - **Google Search Grounding**：实时联网搜索接地，精准回答突发时事与技术问题。
-   - **Nano Banana Pro**：高精插画生成与摄像头肖像重构（Reimagine Studio）。
+6. **本地/远程 VTR MCP Server 深度集成**
+   - 遵循 Model Context Protocol (MCP) 规范，深度连接车辆轨迹重构服务器（`vtr-mcp-server`）。
+   - 支持单次车辆通行全息时序还原（线圈、激光光栅、车牌识别相机、ETC 天线 RSU、道闸动作等）与异常诊断。
 
 ---
 
@@ -48,8 +50,7 @@
 - **Node.js**: `>= 18.0.0` (推荐 Node.js 20 LTS)
 - **包管理工具**: `npm` (推荐) 或 `pnpm` / `yarn`
 - **浏览器推荐**: Google Chrome / Microsoft Edge（完整支持 Web Speech API 唤醒词与 AudioContext）
-- **Gemini API Key**: 从 [Google AI Studio](https://aistudio.google.com/) 获取。
-- **本地或内网 VTR MCP Server**: 如默认配置 `http://128.23.8.200:8790/sse`（自带或自建 MCP 服务均可）。
+- **代码仓库**: `https://github.com/jizhiguo/jarvis.git`
 
 ---
 

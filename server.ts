@@ -15,6 +15,11 @@ import {
   callMcpTool,
   executeVtrReconstruction,
   executeVtrLaneDiagnostics,
+  getPublicMcpServers,
+  addMcpServer,
+  updateMcpServer,
+  deleteMcpServer,
+  testSingleMcpServer,
 } from "./server/mcpManager";
 import {
   getRealtimeProvider,
@@ -24,6 +29,8 @@ import {
   resolveTextApiKey,
   resolveProviderHeaders,
   updateRealtimeProvider,
+  addRealtimeProvider,
+  testProviderHealth,
   type RealtimeProviderConfig,
 } from "./server/realtimeManager";
 
@@ -122,6 +129,73 @@ app.put("/api/realtime/providers/:id", (req, res) => {
     res.json({ success: true, provider: publicRealtimeProvider(updated) });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/realtime/providers", (req, res) => {
+  try {
+    const created = addRealtimeProvider(req.body as RealtimeProviderConfig);
+    res.json({ success: true, provider: publicRealtimeProvider(created) });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Instant test endpoint for providers
+app.post("/api/realtime/providers/:id/test", async (req, res) => {
+  try {
+    const { modality, apiKeyOverride } = req.body || {};
+    const result = await testProviderHealth(req.params.id, modality, apiKeyOverride);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message, latencyMs: 0 });
+  }
+});
+
+// Multi-MCP server routes
+app.get("/api/mcp/servers", (_req, res) => {
+  res.json({ servers: getPublicMcpServers() });
+});
+
+app.post("/api/mcp/servers", (req, res) => {
+  try {
+    const server = addMcpServer(req.body);
+    res.json({ success: true, server });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put("/api/mcp/servers/:id", (req, res) => {
+  try {
+    const server = updateMcpServer(req.params.id, req.body);
+    res.json({ success: true, server });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/mcp/servers/:id", (req, res) => {
+  try {
+    const ok = deleteMcpServer(req.params.id);
+    res.json({ success: ok });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/mcp/test-server", async (req, res) => {
+  try {
+    const result = await testSingleMcpServer(req.body || {});
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({
+      connected: false,
+      latencyMs: 0,
+      toolCount: 0,
+      tools: [],
+      message: err.message,
+    });
   }
 });
 
