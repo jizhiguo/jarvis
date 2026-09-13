@@ -1,18 +1,25 @@
 [
   {
+    "key": "vtr-remote",
     "id": "vtr-remote",
     "name": "VTR 车辆轨迹重构服务 (远程集群)",
     "description": "基于 LTC (利通虾) 的车道日志诊断与单次通行全息轨迹还原 FastMCP 服务",
-    "enabled": true,
+    "enabled": false,
     "transport": "sse",
     "url": "http://128.23.8.200:8790/sse",
     "headers": {
       "X-API-Key": "${VTR_MCP_API_KEY}"
     },
     "apiKeyEnv": "VTR_MCP_API_KEY",
-    "timeoutMs": 6000
+    "timeoutMs": 6000,
+    "command": "",
+    "args": [],
+    "env": {},
+    "cwd": "",
+    "tools": null
   },
   {
+    "key": "vtr-local",
     "id": "vtr-local",
     "name": "VTR 车辆轨迹重构服务 (本地开发)",
     "description": "本地开发或私有化网关 FastMCP/SSE 诊断服务 (127.0.0.1:8790)",
@@ -23,9 +30,15 @@
       "X-API-Key": "${VTR_MCP_API_KEY}"
     },
     "apiKeyEnv": "VTR_MCP_API_KEY",
-    "timeoutMs": 5000
+    "timeoutMs": 5000,
+    "command": "",
+    "args": [],
+    "env": {},
+    "cwd": "",
+    "tools": null
   },
   {
+    "key": "custom-mcp",
     "id": "custom-mcp",
     "name": "自定义 MCP 服务 (HTTP / SSE)",
     "description": "自定义扩展 MCP 服务，支持 SSE 长连接或 Streaming HTTP JSON-RPC",
@@ -33,6 +46,11 @@
     "transport": "http",
     "url": "http://127.0.0.1:8080/mcp",
     "headers": {},
-    "timeoutMs": 5000
+    "timeoutMs": 5000,
+    "command": "",
+    "args": [],
+    "env": {},
+    "cwd": "",
+    "tools": null
   }
 ]
